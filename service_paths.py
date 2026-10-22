@@ -6,7 +6,7 @@ from pathlib import Path
 import stat
 
 API_VERSION = 1
-ROOT_MODULES = ("route_probe_helper.py", "split_tunnel_helper.py", "service_paths.py", "privileged_service.py")
+ROOT_MODULES = ("route_probe_helper.py", "split_tunnel_helper.py", "service_paths.py", "privileged_service.py", "json_codec.py")
 INSTALL_BASE = Path("/Library/PrivilegedHelperTools/local.fortisplit.helper")
 
 

@@ -12,6 +12,7 @@ import signal
 import socket
 import sys
 import time
+import json_codec
 
 import route_probe_helper as base
 
@@ -343,7 +344,7 @@ def main():
             raw = sys.stdin.buffer.readline(32769)
             if len(raw) > 32768:
                 raise base.ProbeError("Слишком большой запрос.")
-            spec = json.loads(raw)
+            spec = json_codec.loads(raw)
             lease = SplitLease(spec, journal=journal, observer=base.emit)
             def interrupted(signum, frame):
                 raise base.ProbeError("Сеанс прерван сигналом {}; откат.".format(signum))

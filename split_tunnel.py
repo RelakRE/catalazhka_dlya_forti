@@ -34,10 +34,8 @@ FORTITRAY_LOG = Path.home() / "Library/Application Support/Fortinet/FortiClient/
 
 
 def private_json(path, data):
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temporary.chmod(0o600)
-    os.replace(str(temporary), str(path))
+    import profile_store
+    profile_store.save(path, data)
 
 
 def report(data, folder):

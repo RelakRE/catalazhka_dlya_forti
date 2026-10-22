@@ -9,12 +9,14 @@ import plistlib
 import shutil
 import subprocess
 import tempfile
+import hashlib
 
 import service_paths
 import bundle_runtime
 
 ROOT = Path(__file__).resolve().parent
 APP = ROOT / "dist/Forti Split Intel.app"
+VERSION = "1.3.0"
 
 
 def sign(path, identity):
@@ -41,7 +43,8 @@ def main():
     resources = contents / "Resources"
     binaries.mkdir(parents=True, exist_ok=True)
     resources.mkdir(parents=True, exist_ok=True)
-    modules = ("split_tunnel.py", "route_probe.py", "vpn_diagnostics.py", "gui_backend.py", "service_client.py", "install_helper.py", "profile_store.py") + service_paths.ROOT_MODULES
+    modules = ("split_tunnel.py", "route_probe.py", "vpn_diagnostics.py", "gui_backend.py", "service_client.py", "install_helper.py", "profile_store.py",
+               "profile_model.py", "platform_contract.py", "platform_adapters.py", "desktop_entry.py", "setup_flow.py", "macos_preflight.py") + service_paths.ROOT_MODULES
     for name in modules:
         shutil.copy2(ROOT / name, resources / name)
     # A release NEVER embeds the developer's private working profile.
@@ -60,10 +63,15 @@ def main():
     (resources / "runtime-manifest.json").write_text(json.dumps(bundle_runtime.manifest(resources / "runtime"), sort_keys=True))
     (resources / "helper-manifest.json").write_text(json.dumps({"api": service_paths.API_VERSION, "digest": service_paths.digest(resources)}, indent=2))
     info = {"CFBundleName": "Forti Split", "CFBundleDisplayName": "Forti Split", "CFBundleExecutable": "FortiSplit",
-            "CFBundleIdentifier": "local.fortisplit.desktop", "CFBundleVersion": "1.2.0",
-            "CFBundleShortVersionString": "1.2.0", "CFBundlePackageType": "APPL", "LSMinimumSystemVersion": "13.0",
+            "CFBundleIdentifier": "local.fortisplit.desktop", "CFBundleVersion": VERSION,
+            "CFBundleShortVersionString": VERSION, "CFBundlePackageType": "APPL", "LSMinimumSystemVersion": "13.0",
             "NSHighResolutionCapable": True, "NSPrincipalClass": "NSApplication"}
     (contents / "Info.plist").write_bytes(plistlib.dumps(info))
+    metadata = {"schema": 1, "version": VERSION, "architecture": "x86_64", "minimum_macos": "13.0",
+                "source_sha256": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
+                                  for name in sorted(set(modules) | {"FortiSplitApp.swift"})},
+                "runtime_archive_sha256": json.loads((ROOT / "runtime-lock.json").read_text())["sha256"]}
+    (resources / "build-metadata.json").write_text(json.dumps(metadata, sort_keys=True, indent=2) + "\n")
     cache = ROOT / "build/swift-cache"
     cache.mkdir(parents=True, exist_ok=True)
     flags = []

@@ -120,13 +120,13 @@ class ServiceSecurityTests(unittest.TestCase):
             for name in service_paths.ROOT_MODULES:
                 (folder / name).write_bytes((ROOT / name).read_bytes())
             (folder / "helper-manifest.json").write_text(json.dumps({"api": 1, "digest": service_paths.digest(folder)}))
-            self.assertEqual(len(install_helper.payload(folder)), 5)
+            self.assertEqual(len(install_helper.payload(folder)), len(service_paths.ROOT_MODULES) + 1)
             (folder / "service_paths.py").write_text("tampered")
-            with self.assertRaises(ValueError):
+            with self.assertRaises((ValueError, OSError)):
                 install_helper.payload(folder)
             (folder / "service_paths.py").unlink()
             (folder / "service_paths.py").symlink_to(ROOT / "service_paths.py")
-            with self.assertRaises(ValueError):
+            with self.assertRaises((ValueError, OSError)):
                 install_helper.payload(folder)
 
     def test_launchd_uses_root_protected_copy_and_never_sudoers(self):

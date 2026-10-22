@@ -110,11 +110,11 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(service_paths.worker_argv(root, "health")[0], str(executable))
             self.assertTrue(install_helper.service_plist(501, True)["ProgramArguments"][0].endswith("runtime/bin/python3.12"))
             executable.write_bytes(b"tamper")
-            with self.assertRaises(ValueError):
+            with self.assertRaises((ValueError, OSError)):
                 install_helper.payload(root)
             executable.unlink()
             executable.symlink_to(root / "service_paths.py")
-            with self.assertRaises(ValueError):
+            with self.assertRaises((ValueError, OSError)):
                 install_helper.payload(root)
 
     def test_unsafe_runtime_manifest_paths_are_rejected(self):

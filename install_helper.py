@@ -11,8 +11,9 @@ import pwd
 import stat
 import subprocess
 import tempfile
+import json_codec
 
-MODULES = ("route_probe_helper.py", "split_tunnel_helper.py", "service_paths.py", "privileged_service.py")
+MODULES = ("route_probe_helper.py", "split_tunnel_helper.py", "service_paths.py", "privileged_service.py", "json_codec.py")
 BASE = Path("/Library/PrivilegedHelperTools/local.fortisplit.helper")
 
 
@@ -40,48 +41,61 @@ def atomic_write(path, contents, mode):
 
 
 def payload(source):
+    source = Path(source)
     data = {}
     digest = hashlib.sha256()
     for name in MODULES:
-        path = source / name
-        info = path.lstat()
-        if not stat.S_ISREG(info.st_mode) or info.st_size > 256 * 1024:
-            raise ValueError("Недопустимый исходник помощника: " + name)
-        contents = path.read_bytes()
+        contents = read_source(source, name, 256 * 1024)
         data[name] = contents
         digest.update(name.encode() + b"\0" + contents)
     runtime = source / "runtime-manifest.json"
     if runtime.exists():
-        if runtime.is_symlink() or runtime.stat().st_size > 4 * 1024 * 1024:
-            raise ValueError("Invalid runtime manifest")
-        contents = runtime.read_bytes()
+        contents = read_source(source, "runtime-manifest.json", 4 * 1024 * 1024)
         data["runtime-manifest.json"] = contents
         digest.update(b"runtime-manifest.json\0" + contents)
         listing = runtime_listing(contents)
         for name, entry in listing.items():
-            path = source / "runtime" / name
-            # Disallow a linked file OR parent directory, including the runtime root.
-            current = path
-            while current != source:
-                if current.is_symlink():
-                    raise ValueError("Linked runtime payload")
-                current = current.parent
-            info = path.lstat()
-            if not stat.S_ISREG(info.st_mode) or info.st_size != entry["size"]:
+            content = read_source(source, "runtime/" + name, entry["size"])
+            if len(content) != entry["size"]:
                 raise ValueError("Invalid runtime payload: " + name)
-            content = path.read_bytes()
             if hashlib.sha256(content).hexdigest() != entry["sha256"]:
                 raise ValueError("Runtime checksum mismatch: " + name)
             data["runtime/" + name] = content
-    expected = json.loads((source / "helper-manifest.json").read_text())
-    if expected.get("digest") != digest.hexdigest() or expected.get("api") != 1:
+    expected = json_codec.loads(read_source(source, "helper-manifest.json", 4096))
+    if (not isinstance(expected, dict) or set(expected) != {"api", "digest"}
+            or type(expected["api"]) is not int or expected["api"] != 1
+            or expected["digest"] != digest.hexdigest()):
         raise ValueError("Проверка целостности установочного пакета не прошла.")
     data["helper-manifest.json"] = json.dumps(expected).encode()
     return data
 
 
+def read_source(source, relative, limit):
+    """Open each component relative to a directory FD; never follow source links."""
+    parts = Path(relative).parts
+    if not parts or Path(relative).is_absolute() or ".." in parts:
+        raise ValueError("Unsafe source path")
+    directory = os.open(str(source), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for name in parts[:-1]:
+            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        with os.fdopen(fd, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or not 0 <= info.st_size <= limit:
+                raise ValueError("Invalid source file: " + relative)
+            data = stream.read(limit + 1)
+            if len(data) > limit:
+                raise ValueError("Source file grew during read: " + relative)
+            return data
+    finally:
+        os.close(directory)
+
+
 def runtime_listing(contents):
-    value = json.loads(contents)
+    value = json_codec.loads(contents)
     if not isinstance(value, dict) or value.get("schema") != 1 or not isinstance(value.get("files"), dict):
         raise ValueError("Invalid runtime manifest")
     files = value["files"]

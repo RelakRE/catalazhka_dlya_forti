@@ -10,6 +10,7 @@ import stat
 import subprocess
 import threading
 import time
+import json_codec
 
 import service_paths as paths
 import split_tunnel_helper as helper
@@ -52,7 +53,12 @@ class Server:
                 raise PermissionError("Peer UID not allowed")
             conn.settimeout(5)
             buffer = b""
+            handshake_deadline = time.monotonic() + 5
             while b"\n" not in buffer and len(buffer) <= 32768:
+                remaining = handshake_deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ValueError("Handshake deadline exceeded")
+                conn.settimeout(remaining)
                 part = conn.recv(4096)
                 if not part:
                     return
@@ -62,7 +68,7 @@ class Server:
             line, _, trailing = buffer.partition(b"\n")
             if trailing not in (b"", b"release\n"):
                 raise ValueError("Unexpected data after handshake")
-            value = json.loads(line)
+            value = json_codec.loads(line)
             mode = self.validate_request(value)
             if mode == "status":
                 conn.sendall((json.dumps({"api": paths.API_VERSION, "uid": self.uid,
@@ -100,7 +106,12 @@ class Server:
                     # block the worker on a full pipe after a GUI crash.
                     process.communicate(timeout=45)
                 except (ValueError, subprocess.TimeoutExpired):
-                    pass  # Never kill a guardian while it may still be rolling back.
+                    # Never clear the busy flag while an independent rollback
+                    # worker is still alive; nor kill it to make the UI look ready.
+                    if owns_busy and process.poll() is None:
+                        owns_busy = False
+                        thread = threading.Thread(target=self.reap_busy, args=(process,), daemon=True)
+                        thread.start()
                 try:
                     conn.sendall((json.dumps({"event": "service_exit", "exit_code": process.poll()}) + "\n").encode())
                 except OSError:
@@ -111,6 +122,17 @@ class Server:
             with self.lock:
                 self.connections.discard(conn)
             conn.close()
+
+    def reap_busy(self, process):
+        try:
+            try:
+                process.communicate()  # Drain rollback receipts without blocking the server.
+            except (OSError, ValueError):
+                process.wait()  # Closed pipes must not advertise a live worker as idle.
+        finally:
+            if process.poll() is not None:
+                with self.lock:
+                    self.busy = False
 
     def relay(self, conn, process):
         can_read = True

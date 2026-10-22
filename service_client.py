@@ -4,6 +4,8 @@ import os
 import select
 import socket
 import time
+import re
+import json_codec
 from types import SimpleNamespace
 
 import route_probe_helper as base
@@ -35,8 +37,12 @@ def status():
                 if not part:
                     break
                 raw += part
-            result = json.loads(raw)
-            if result.get("api") != paths.API_VERSION or result.get("uid") != os.getuid():
+            result = json_codec.loads(raw)
+            if (not isinstance(result, dict) or set(result) != {"api", "uid", "digest", "busy"}
+                    or type(result["api"]) is not int or result["api"] != paths.API_VERSION
+                    or type(result["uid"]) is not int or result["uid"] != os.getuid()
+                    or type(result["busy"]) is not bool
+                    or not isinstance(result["digest"], str) or not re.fullmatch(r"[0-9a-f]{64}", result["digest"])):
                 raise ValueError("Unexpected helper protocol/user")
             return {"installed": True, **result}
     except (OSError, ValueError) as exc:
@@ -62,7 +68,9 @@ class ServiceGuardian:
             if b"\n" in self.buffer:
                 raw, self.buffer = self.buffer.split(b"\n", 1)
                 try:
-                    event = json.loads(raw)
+                    event = json_codec.loads(raw)
+                    if not isinstance(event, dict) or not isinstance(event.get("event"), str):
+                        raise ValueError("Invalid event shape")
                 except ValueError:
                     event = {"event": "error", "message": "Invalid helper response"}
                 self.events.append(event)

@@ -17,6 +17,7 @@ import stat
 import subprocess
 import sys
 import time
+import json_codec
 
 
 LOCK_FILE = "/var/run/forti-route-probe.lock"
@@ -268,7 +269,7 @@ def acquire_journal():
         contents = os.read(fd, 131073)
         if len(contents) > 131072:
             raise ValueError("oversized journal")
-        previous = json.loads(contents) if contents else {"status": "inactive"}
+        previous = json_codec.loads(contents) if contents else {"status": "inactive"}
     except ValueError:
         os.close(fd)
         raise ProbeError("Журнал отката повреждён; автоматическая новая проба запрещена.")

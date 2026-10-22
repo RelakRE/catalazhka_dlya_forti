@@ -7,7 +7,7 @@
 ## Автоматические проверки
 
 ```sh
-python3 -B -m unittest -q test_desktop_app test_profiles test_split_tunnel test_route_probe test_vpn_diagnostics
+python3 -B -m unittest -q test_desktop_app test_profiles test_portability test_portable_core test_split_tunnel test_route_probe test_vpn_diagnostics
 ```
 
 Проверяются: план маршрутов, точное владение записями и откат, EOF/таймер,
@@ -18,6 +18,10 @@ python3 -B -m unittest -q test_desktop_app test_profiles test_split_tunnel test_
 
 У GUI есть отдельный `--ui-test <файл.json>`: он не устанавливает помощник,
 не меняет сеть и не записывает реальный пользовательский профиль.
+Переносимое ядро отдельно: `python3 -B -m unittest -q test_portable_core`.
+Тёмный предпросмотр: `--preview <файл.png> --appearance dark --preview-profile`.
+UI-проверки включают обе темы, JSON null, один основной шаг,
+группу обслуживания, блокировки и watchdog собственного read-only процесса.
 
 ## Ручная приёмка на отдельном Intel Mac
 
@@ -34,6 +38,12 @@ python3 -B -m unittest -q test_desktop_app test_profiles test_split_tunnel test_
    остановка с откатом, а не автоматическое поддержание разделения.
 7. Проверить «Восстановить», обновление и удаление помощника, сохранность профиля
    после замены `.app`. Не проводить разрушительные тесты во время важного звонка.
+8. Пройти мастер без дополнительных кнопок; отменить выбор файла/системный пароль
+   и повторить. Проверить недоступный FortiClient, другой VPN и ошибочный профиль.
+9. Проверить смену системной темы без перезапуска, маленькое окно/прокрутку,
+   клавиатуру, VoiceOver, увеличение контраста и уменьшенную прозрачность.
+
+Результаты внутреннего ревью и оставшиеся риски: [REVIEW.md](REVIEW.md).
 
 ## Известные ограничения
 
