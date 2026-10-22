@@ -8,3 +8,5 @@ dist/
 private/
 public-release/
 release-assets/
+windows/**/bin/
+windows/**/obj/

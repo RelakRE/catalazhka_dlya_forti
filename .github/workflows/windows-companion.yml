@@ -1,0 +1,50 @@
+name: Windows Companion
+on:
+  push:
+    branches: [main, codex/windows-companion]
+    paths: ['windows/**', '.github/workflows/windows-companion.yml', 'profile_model.py', 'platform_contract.py', 'platform_adapters.py', 'setup_flow.py', 'desktop_entry.py', 'json_codec.py', 'test_portable_core.py']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Portable contract tests (no Unix backend imports)
+        run: python -B -m unittest -q test_portable_core
+      - name: Build self-contained native Windows application
+        run: dotnet publish windows/FortiSplit.Companion/FortiSplit.Companion.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -o build/windows-publish
+      - name: Native Windows safety and UI tests
+        shell: pwsh
+        run: |
+          $testReport = Join-Path $PWD 'build/WINDOWS-VALIDATION.json'
+          $testImage = Join-Path $PWD 'build/Windows-Companion-preview.png'
+          $testProcess = Start-Process -FilePath 'build/windows-publish/FortiSplit.Companion.exe' -ArgumentList @('--self-test', "`"$testReport`"", "`"$testImage`"") -PassThru
+          if (-not $testProcess.WaitForExit(60000)) { $testProcess.Kill(); throw 'Self-test timeout' }
+          if ($testProcess.ExitCode -ne 0) { Get-Content $testReport; throw 'Self-test failed' }
+          $evidence = Get-Content $testReport -Raw | ConvertFrom-Json
+          if (-not $evidence.successful) { throw 'Incomplete Windows evidence' }
+          $evidence | Add-Member -NotePropertyName source_commit -NotePropertyValue '${{ github.sha }}'
+          $evidence | Add-Member -NotePropertyName sdk -NotePropertyValue (dotnet --version)
+          $evidence | ConvertTo-Json -Depth 8 | Set-Content $testReport -Encoding utf8NoBOM
+      - name: Package preview (no signing or real VPN acceptance claimed)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path build/windows-assets
+          Copy-Item windows/README.md build/windows-publish/README.md
+          Compress-Archive -Path build/windows-publish/* -DestinationPath build/windows-assets/Forti-Split-Companion-0.1.0-Windows-x64.zip -CompressionLevel Optimal
+          Copy-Item build/WINDOWS-VALIDATION.json,build/Windows-Companion-preview.png build/windows-assets/
+          $releaseHashes = Get-ChildItem build/windows-assets -File | Sort-Object Name | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $_.Name }
+          $releaseHashes | Set-Content build/windows-assets/SHA256SUMS.txt -Encoding ascii
+      - name: Upload verified preview artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-companion-preview
+          path: build/windows-assets/
+          if-no-files-found: error
+          retention-days: 14
