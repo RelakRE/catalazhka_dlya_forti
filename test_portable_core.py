@@ -9,9 +9,17 @@ import desktop_entry
 import platform_contract
 import profile_model
 import setup_flow
+import json_codec
 
 
 class CrossPlatformCoreTests(unittest.TestCase):
+    def test_json_depth_limit_is_explicit_not_c_decoder_dependent(self):
+        with self.assertRaises(ValueError):
+            json_codec.loads("[" * 65 + "0" + "]" * 65)
+        literal = "[" * 1000 + '\\"' + "]" * 1000
+        self.assertEqual(json_codec.loads(json.dumps({"text": literal})), {"text": literal})
+        self.assertEqual(json_codec.loads(b'{"n": 1}'), {"n": 1})
+
     def test_windows_backend_is_explicitly_unavailable(self):
         info = platform_contract.describe("Windows", "AMD64", "11")
         output = io.StringIO()
