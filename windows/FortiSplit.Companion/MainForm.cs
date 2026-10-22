@@ -64,7 +64,11 @@ public sealed class MainForm : Form
         rdp.Text = settings.RdpPath; trueConf.Text = settings.TrueConfPath;
         rdpAuto.Checked = settings.LaunchRdp; trueAuto.Checked = settings.LaunchTrueConf;
         minimize.Checked = settings.MinimizeForti;
-        if (!testMode) { RefreshAdapters(); login.Checked = WindowsIntegration.LoginEnabled(); }
+        if (!testMode)
+        {
+            try { RefreshAdapters(); } catch (Exception ex) { error.Text = "Не удалось получить адаптеры: " + ex.Message; }
+            try { login.Checked = WindowsIntegration.LoginEnabled(); } catch (Exception ex) { error.Text = "Не удалось прочитать настройку автозапуска: " + ex.Message; }
+        }
         var menu = new ContextMenuStrip();
         menu.Items.Add("Открыть", null, (_, _) => ShowWork());
         trayAction.Click += (_, _) => PrimaryAction(); menu.Items.Add(trayAction);
@@ -87,7 +91,8 @@ public sealed class MainForm : Form
     private void BuildConfiguration()
     {
         var chooseForti = Button("Выбрать FortiClient.exe…"); chooseForti.Click += (_, _) => Choose(forti, "Приложение|*.exe");
-        var refresh = Button("Обновить список адаптеров"); refresh.Click += (_, _) => RefreshAdapters();
+        var refresh = Button("Обновить список адаптеров"); refresh.Click += (_, _) =>
+        { try { RefreshAdapters(); } catch (Exception ex) { error.Text = "Не удалось получить адаптеры: " + ex.Message; tabs.SelectedIndex = 0; UpdateView(); } };
         var chooseRdp = Button("Выбрать доверенный .rdp-файл…"); chooseRdp.Click += (_, _) => Choose(rdp, "Подключение RDP|*.rdp");
         var chooseTrue = Button("Выбрать TrueConf.exe…"); chooseTrue.Click += (_, _) => Choose(trueConf, "Приложение|*.exe");
         var save = Button("Сохранить настройки"); save.Click += (_, _) => SaveConfiguration();

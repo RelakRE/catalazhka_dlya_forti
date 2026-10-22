@@ -62,6 +62,7 @@ public static class WindowsIntegration
         foreach (var root in new[] { Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
                      Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) })
         {
+            if (string.IsNullOrEmpty(root)) continue;
             var path = Path.Combine(root, "Fortinet", "FortiClient", "FortiClient.exe");
             if (File.Exists(path)) return path;
         }
@@ -71,7 +72,8 @@ public static class WindowsIntegration
     public static void OpenExecutable(string path)
     {
         WorkplaceSettings.ValidatePath(path, ".exe"); SettingsStore.RegularFile(path);
-        Process.Start(new ProcessStartInfo(path) { UseShellExecute = false });
+        Process.Start(new ProcessStartInfo(path) { UseShellExecute = false,
+            WorkingDirectory = Path.GetDirectoryName(path) ?? throw new IOException("Неизвестный каталог приложения.") });
     }
 
     public static void OpenRdp(string file)
@@ -113,13 +115,17 @@ public static class WindowsIntegration
     private static string LoginCommand()
     {
         var command = "\"" + (Environment.ProcessPath ?? throw new IOException("Неизвестный путь приложения.")) + "\" --login";
-        if (command.Length > 260) throw new IOException("Для автозапуска перенесите приложение в папку с более коротким путём.");
         return command;
     }
     public static void SetLogin(bool enabled)
     {
         using var key = Registry.CurrentUser.CreateSubKey(RunKey, true);
-        if (enabled) key.SetValue(RunName, LoginCommand(), RegistryValueKind.String);
+        if (enabled)
+        {
+            var command = LoginCommand();
+            if (command.Length > 260) throw new IOException("Для автозапуска перенесите приложение в папку с более коротким путём.");
+            key.SetValue(RunName, command, RegistryValueKind.String);
+        }
         else key.DeleteValue(RunName, false);
     }
 }
