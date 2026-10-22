@@ -296,7 +296,11 @@ public sealed class MainForm : Form
     {
         CreateControl(); Show(); tabs.SelectedIndex = 1; PerformLayout();
         using var bitmap = new Bitmap(Width, Height); DrawToBitmap(bitmap, new Rectangle(0, 0, Width, Height));
-        bitmap.Save(screenshot, System.Drawing.Imaging.ImageFormat.Png); Hide();
+        bitmap.Save(screenshot, System.Drawing.Imaging.ImageFormat.Png);
+        tabs.SelectedIndex = 0; PerformLayout();
+        using var work = new Bitmap(Width, Height); DrawToBitmap(work, new Rectangle(0, 0, Width, Height));
+        work.Save(Path.Combine(Path.GetDirectoryName(screenshot)!, "Windows-Companion-work.png"), System.Drawing.Imaging.ImageFormat.Png);
+        Hide();
     }
     public bool TestHasTabs => tabs.TabCount == 2;
     public bool TestSafeDefaults => !rdpAuto.Checked && !trueAuto.Checked && run.Phase == RunPhase.Idle;

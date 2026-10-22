@@ -38,9 +38,18 @@ jobs:
           New-Item -ItemType Directory -Path build/windows-assets
           Copy-Item windows/README.md build/windows-publish/README.md
           Compress-Archive -Path build/windows-publish/* -DestinationPath build/windows-assets/Forti-Split-Companion-0.1.0-Windows-x64.zip -CompressionLevel Optimal
-          Copy-Item build/WINDOWS-VALIDATION.json,build/Windows-Companion-preview.png build/windows-assets/
+          Copy-Item build/WINDOWS-VALIDATION.json,build/Windows-Companion*.png build/windows-assets/
           $releaseHashes = Get-ChildItem build/windows-assets -File | Sort-Object Name | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $_.Name }
-          $releaseHashes | Set-Content build/windows-assets/SHA256SUMS.txt -Encoding ascii
+          [IO.File]::WriteAllText((Join-Path $PWD 'build/windows-assets/SHA256SUMS.txt'), ([string]::Join("`n", $releaseHashes) + "`n"), [Text.UTF8Encoding]::new($false))
+      - name: Upload small validation and UI evidence separately
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-companion-evidence
+          path: |
+            build/WINDOWS-VALIDATION.json
+            build/Windows-Companion*.png
+          if-no-files-found: error
+          retention-days: 14
       - name: Upload verified preview artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
