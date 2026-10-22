@@ -93,6 +93,8 @@ class WizardTests(unittest.TestCase):
         self.value["vpn"] = {"interface": "utun2"}
         self.assertEqual(self.stage(), "ready")
         self.assertEqual(setup_flow.flow(self.value)["action"], "enable")
+        self.assertNotIn("30", setup_flow.flow(self.value)["detail"])
+        self.assertNotIn("минут", setup_flow.flow(self.value)["detail"])
 
     def test_no_unsafe_enable_when_unprepared_or_in_another_session(self):
         self.value.update(profile={"ready": True}, service={"installed": True, "current": True}, helper_healthy=True,

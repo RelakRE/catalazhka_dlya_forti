@@ -16,7 +16,7 @@ import bundle_runtime
 
 ROOT = Path(__file__).resolve().parent
 APP = ROOT / "dist/Forti Split Intel.app"
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 
 
 def sign(path, identity):
@@ -65,11 +65,12 @@ def main():
     info = {"CFBundleName": "Forti Split", "CFBundleDisplayName": "Forti Split", "CFBundleExecutable": "FortiSplit",
             "CFBundleIdentifier": "local.fortisplit.desktop", "CFBundleVersion": VERSION,
             "CFBundleShortVersionString": VERSION, "CFBundlePackageType": "APPL", "LSMinimumSystemVersion": "13.0",
-            "NSHighResolutionCapable": True, "NSPrincipalClass": "NSApplication"}
+            "NSHighResolutionCapable": True, "NSPrincipalClass": "NSApplication",
+            "CFBundleIconFile": "FortiSplit.icns"}
     (contents / "Info.plist").write_bytes(plistlib.dumps(info))
     metadata = {"schema": 1, "version": VERSION, "architecture": "x86_64", "minimum_macos": "13.0",
                 "source_sha256": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-                                  for name in sorted(set(modules) | {"FortiSplitApp.swift"})},
+                                  for name in sorted(set(modules) | {"FortiSplitApp.swift", "AppIcon.swift"})},
                 "runtime_archive_sha256": json.loads((ROOT / "runtime-lock.json").read_text())["sha256"]}
     (resources / "build-metadata.json").write_text(json.dumps(metadata, sort_keys=True, indent=2) + "\n")
     cache = ROOT / "build/swift-cache"
@@ -86,6 +87,14 @@ def main():
         overlay = ROOT / "build/swift-overlay.json"
         overlay.write_text(json.dumps({"version": 0, "roots": [{"type": "file", "name": str(legacy), "external-contents": str(empty)}]}))
         flags = ["-vfsoverlay", str(overlay), "-Xcc", "-ivfsoverlay", "-Xcc", str(overlay)]
+    icon_generator = stage / "draw-icon"
+    iconset = stage / "FortiSplit.iconset"
+    subprocess.run(["/usr/bin/xcrun", "swiftc", "-swift-version", "5", "-parse-as-library", "-O",
+                    "-target", "x86_64-apple-macos13.0", "-module-cache-path", str(cache)] + flags +
+                   ["-framework", "AppKit", str(ROOT / "AppIcon.swift"), "-o", str(icon_generator)], check=True)
+    subprocess.run([str(icon_generator), str(iconset)], check=True)
+    subprocess.run(["/usr/bin/iconutil", "--convert", "icns", "--output",
+                    str(resources / "FortiSplit.icns"), str(iconset)], check=True)
     subprocess.run(["/usr/bin/xcrun", "swiftc", "-swift-version", "5", "-parse-as-library", "-O",
                     "-target", "x86_64-apple-macos13.0",
                     "-module-cache-path", str(cache)] + flags + ["-framework", "AppKit", str(ROOT / "FortiSplitApp.swift"),
@@ -93,7 +102,8 @@ def main():
     sign(application, args.identity)
     subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(application)], check=True)
     os.rename(application, args.output)
-    stage.rmdir()
+    # Only this build's dedicated staging directory; existing apps are untouched.
+    shutil.rmtree(stage)
     print(args.output)
 
 

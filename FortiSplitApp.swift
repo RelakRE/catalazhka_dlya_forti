@@ -577,7 +577,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let ready = stage != "profile"
         state = ["flow": ["stage": stage, "step": ready ? 4 : 1,
                           "title": ready ? "Можно включить разделение" : "Выберите рабочий профиль",
-                          "detail": ready ? "Интернет пойдёт напрямую, рабочие IPv4 — через VPN. После включения проверьте рабочий стол и звонок. Ограничения 30 минут нет; окно нужно оставить открытым." : "Получите приватный JSON-файл через внутренний канал. Выберите его один раз — настройки останутся только на этом Mac. Пароли и MFA в файл не входят.",
+                          "detail": ready ? "Интернет пойдёт напрямую, рабочие IPv4 — через VPN. После включения проверьте рабочий стол и звонок. Оставьте это окно открытым во время работы." : "Получите приватный JSON-файл через внутренний канал. Выберите его один раз — настройки останутся только на этом Mac. Пароли и MFA в файл не входят.",
                           "primary_title": ready ? "Включить разделение" : "Выбрать файл профиля…",
                           "action": ready ? "enable" : "import-profile", "blocked": false],
                  "service": ["current": ready]]
@@ -609,6 +609,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         checks["maintenance_group_collapses"] = extras.isHidden
         setPreview(stage: "ready")
         checks["ready_primary"] = primary.title == "Включить разделение"
+        checks["ready_copy_has_no_legacy_duration"] = !detailLabel.stringValue.contains("30") && !detailLabel.stringValue.contains("минут")
+        if let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleIconFile") as? String,
+           let url = Bundle.main.url(forResource: name, withExtension: nil),
+           let icon = NSImage(contentsOf: url) {
+            checks["bundled_application_icon"] = icon.isValid && icon.size.width > 0
+        } else { checks["bundled_application_icon"] = false }
         worker = Process(); workerAction = "enable"; state["session"] = ["state": "active"]; updateUI()
         checks["one_active_stop_action"] = primary.title == "Отключить разделение" && primary.isEnabled
         checks["active_blocks_profile_and_recovery"] = !importButton.isEnabled && !recoverButton.isEnabled
