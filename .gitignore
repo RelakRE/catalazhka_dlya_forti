@@ -1,0 +1,10 @@
+diagnostics/
+work-targets.txt
+__pycache__/
+*.pyc
+build/
+dist/
+.DS_Store
+private/
+public-release/
+release-assets/
