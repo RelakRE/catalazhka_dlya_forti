@@ -107,7 +107,12 @@ public static class WindowsIntegration
         using var key = Registry.CurrentUser.OpenSubKey(RunKey);
         return string.Equals(key?.GetValue(RunName) as string, LoginCommand(), StringComparison.Ordinal);
     }
-    private static string LoginCommand() => "\"" + Environment.ProcessPath + "\" --login";
+    private static string LoginCommand()
+    {
+        var command = "\"" + (Environment.ProcessPath ?? throw new IOException("Неизвестный путь приложения.")) + "\" --login";
+        if (command.Length > 260) throw new IOException("Для автозапуска перенесите приложение в папку с более коротким путём.");
+        return command;
+    }
     public static void SetLogin(bool enabled)
     {
         using var key = Registry.CurrentUser.CreateSubKey(RunKey, true);

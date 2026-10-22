@@ -55,6 +55,8 @@ internal static class SelfTests
             checks["ui_does_not_start_vpn_or_apps"] = form.TestSafeDefaults;
             form.TestLayout(screenshot);
             checks["native_ui_rendered"] = File.Exists(screenshot) && new FileInfo(screenshot).Length > 1000;
+            using var firstRun = new MainForm(store, testMode: true, initial: valid with { SetupComplete = false });
+            checks["wizard_options_and_settings_restore"] = firstRun.TestWizard();
         }
         catch (Exception error) { checks["unexpected_" + error.GetType().Name] = false; }
         finally { Directory.Delete(directory, true); } // Only this test's freshly created temp directory.

@@ -106,7 +106,7 @@ public sealed class MainForm : Form
         adapter.Items.Clear();
         adapter.Items.AddRange(WindowsIntegration.Adapters().Cast<object>().ToArray());
         for (int i = 0; i < adapter.Items.Count; i++)
-            if (((AdapterChoice)adapter.Items[i]).Id == selected) adapter.SelectedIndex = i;
+            if (adapter.Items[i] is AdapterChoice choice && choice.Id == selected) adapter.SelectedIndex = i;
         if (adapter.SelectedIndex < 0 && adapter.Items.Count == 1) adapter.SelectedIndex = 0;
     }
     private static void Choose(TextBox destination, string filter)
@@ -133,7 +133,7 @@ public sealed class MainForm : Form
             if (proposed.LaunchTrueConf) SettingsStore.RegularFile(proposed.TrueConfPath);
             if (testMode) throw new InvalidOperationException("Self-test cannot register startup or save real settings.");
             store.Save(proposed); settings = proposed;
-            if (login.Checked != WindowsIntegration.LoginEnabled()) WindowsIntegration.SetLogin(login.Checked);
+            WindowsIntegration.SetLogin(login.Checked); // Explicit user Save, never startup/timer.
             error.Text = ""; tabs.SelectedIndex = 0;
             UpdateView(); return true;
         }
@@ -227,7 +227,7 @@ public sealed class MainForm : Form
         {
             // Move the same controls between the wizard and settings; never duplicate state.
             wizard.Controls.Clear();
-            if (wizardStep == 0) { title.Text = "Шаг 1 из 3 · FortiClient"; detail.Text = "Укажите установленный официальный FortiClient. Пароли и MFA будут вводиться только в нём."; primary.Text = "Продолжить"; }
+            if (wizardStep == 0) { title.Text = "Шаг 1 из 3 · FortiClient"; detail.Text = "Укажите установленный официальный FortiClient. Пароли и MFA будут вводиться только в нём."; wizard.Controls.Add(forti); primary.Text = string.IsNullOrEmpty(forti.Text) ? "Выбрать FortiClient.exe…" : "Продолжить"; }
             else if (wizardStep == 1)
             {
                 title.Text = "Шаг 2 из 3 · Проверка VPN"; detail.Text = "Выберите адаптер Fortinet и рабочий IPv4/TCP-порт, доступный через VPN. Companion не меняет маршруты.";
@@ -241,7 +241,7 @@ public sealed class MainForm : Form
         }
         else
         {
-            if (!configuration.Controls.Contains(adapter)) RestoreConfiguration();
+            if (SharedControls().Any(control => !configuration.Controls.Contains(control))) RestoreConfiguration();
             title.Text = run.Phase == RunPhase.Ready ? "Рабочий VPN подтверждён" : run.Phase == RunPhase.Waiting ? "Ожидаем вход в FortiClient" : "Готово к началу работы";
             primary.Text = run.Phase == RunPhase.Ready ? "Завершить работу" : run.Phase == RunPhase.Waiting ? "Отменить запуск" : "Начать работу";
             if (run.Phase == RunPhase.Waiting) detail.Text = "Завершите вход с кодом iPhone в FortiClient. Проверим маршрут через выбранный адаптер и доступность рабочего TCP-порта, затем один раз откроем выбранные программы.";
@@ -256,8 +256,12 @@ public sealed class MainForm : Form
 
     private void RestoreConfiguration()
     {
-        configuration.Controls.Clear(); BuildConfiguration();
+        var retained = SharedControls().ToHashSet();
+        foreach (Control control in configuration.Controls.Cast<Control>().ToArray())
+        { configuration.Controls.Remove(control); if (!retained.Contains(control)) control.Dispose(); }
+        BuildConfiguration();
     }
+    private Control[] SharedControls() => [forti, adapter, probe, port, rdpAuto, rdp, trueAuto, trueConf, minimize, login];
     private void ShowWork() { Show(); WindowState = FormWindowState.Normal; tabs.SelectedIndex = 0; Activate(); }
     private void ThemeChanged(object? sender, UserPreferenceChangedEventArgs e)
     { if (!IsDisposed && IsHandleCreated) BeginInvoke((Action)ApplyTheme); }
@@ -291,6 +295,14 @@ public sealed class MainForm : Form
     }
     public bool TestHasTabs => tabs.TabCount == 2;
     public bool TestSafeDefaults => !rdpAuto.Checked && !trueAuto.Checked && run.Phase == RunPhase.Idle;
+    public bool TestWizard()
+    {
+        adapter.Items.Add(new AdapterChoice("synthetic-adapter", "Test Fortinet")); adapter.SelectedIndex = 0;
+        WizardAction(); WizardAction();
+        bool offered = wizardStep == 2 && wizard.Controls.Contains(rdpAuto) && wizard.Controls.Contains(trueAuto);
+        settings.SetupComplete = true; UpdateView();
+        return offered && SharedControls().All(control => configuration.Controls.Contains(control));
+    }
     protected override void Dispose(bool disposing)
     {
         if (disposing)
