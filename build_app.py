@@ -16,7 +16,7 @@ import bundle_runtime
 
 ROOT = Path(__file__).resolve().parent
 APP = ROOT / "dist/Forti Split Intel.app"
-VERSION = "1.3.1"
+VERSION = "1.4.0"
 
 
 def sign(path, identity):
@@ -52,6 +52,7 @@ def main():
     shutil.copy2(ROOT / "THIRD_PARTY_NOTICES.md", resources)
     runtime = bundle_runtime.obtain(args.runtime_archive)
     shutil.copytree(runtime, resources / "runtime")
+    compacted = bundle_runtime.compact(resources / "runtime")
     magic = {b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca"}
     # Sign every nested interpreter, extension and dylib before sealing the app.
     for path in sorted((resources / "runtime").rglob("*")):
@@ -70,7 +71,8 @@ def main():
     (contents / "Info.plist").write_bytes(plistlib.dumps(info))
     metadata = {"schema": 1, "version": VERSION, "architecture": "x86_64", "minimum_macos": "13.0",
                 "source_sha256": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-                                  for name in sorted(set(modules) | {"FortiSplitApp.swift", "AppIcon.swift"})},
+                                  for name in sorted(set(modules) | {"FortiSplitApp.swift", "AppIcon.swift", "Workplace.swift"})},
+                "runtime_compaction": compacted,
                 "runtime_archive_sha256": json.loads((ROOT / "runtime-lock.json").read_text())["sha256"]}
     (resources / "build-metadata.json").write_text(json.dumps(metadata, sort_keys=True, indent=2) + "\n")
     cache = ROOT / "build/swift-cache"
@@ -98,6 +100,7 @@ def main():
     subprocess.run(["/usr/bin/xcrun", "swiftc", "-swift-version", "5", "-parse-as-library", "-O",
                     "-target", "x86_64-apple-macos13.0",
                     "-module-cache-path", str(cache)] + flags + ["-framework", "AppKit", str(ROOT / "FortiSplitApp.swift"),
+                    str(ROOT / "Workplace.swift"), "-framework", "ServiceManagement",
                     "-o", str(binaries / "FortiSplit")], check=True)
     sign(application, args.identity)
     subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(application)], check=True)

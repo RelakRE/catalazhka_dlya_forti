@@ -80,6 +80,30 @@ class ProfileTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_compaction_removes_only_identical_aliases(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "bin").mkdir()
+            for name in ("python", "python3", "python3.12"):
+                (root / "bin" / name).write_bytes(b"same interpreter")
+            stdlib = root / "stdlib.py"
+            stdlib.write_bytes(b"unchanged")
+            result = bundle_runtime.compact(root)
+            self.assertEqual(result["saved_bytes"], 2 * len(b"same interpreter"))
+            self.assertTrue((root / "bin/python3.12").is_file())
+            self.assertEqual(stdlib.read_bytes(), b"unchanged")
+            self.assertFalse((root / "bin/python").exists())
+
+    def test_compaction_rejects_nonidentical_alias(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "bin").mkdir()
+            (root / "bin/python3.12").write_bytes(b"canonical")
+            (root / "bin/python").write_bytes(b"different")
+            with self.assertRaises(ValueError):
+                bundle_runtime.compact(root)
+            self.assertEqual((root / "bin/python").read_bytes(), b"different")
+
     def test_archive_traversal_and_devices_are_rejected(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

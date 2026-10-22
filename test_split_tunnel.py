@@ -426,6 +426,7 @@ class ControllerTests(unittest.TestCase):
                 try:
                     server.state = "active"
                     self.assertEqual(app.request_control("status")["state"], "active")
+                    self.assertEqual(app.request_control("status")["pid"], os.getpid())
                     self.assertEqual(app.request_control("stop")["state"], "active")
                     self.assertTrue(server.stop_requested.wait(2))
                 finally:

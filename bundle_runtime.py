@@ -87,6 +87,30 @@ def manifest(directory):
     return {"schema": 1, "files": result}
 
 
+def compact(directory):
+    """Remove only verified, redundant interpreter aliases from our staged runtime.
+
+    The app, root service and subprocesses explicitly use bin/python3.12. No
+    stdlib, native library, certificate store or licence is removed or compressed.
+    The upstream archive is never modified.
+    """
+    directory = Path(directory)
+    canonical = directory / "bin/python3.12"
+    expected = hashlib.sha256(canonical.read_bytes()).digest()
+    removed = []
+    saved = 0
+    for name in ("python", "python3"):
+        alias = directory / "bin" / name
+        if alias.is_file() and not alias.is_symlink():
+            data = alias.read_bytes()
+            if hashlib.sha256(data).digest() != expected:
+                raise ValueError("Interpreter alias differs; refusing compaction")
+            saved += len(data)
+            alias.unlink()
+            removed.append("bin/" + name)
+    return {"removed_identical_aliases": removed, "saved_bytes": saved}
+
+
 def obtain(archive=None):
     lock = json.loads((ROOT / "runtime-lock.json").read_text())
     cache = ROOT / "build/runtime-download"

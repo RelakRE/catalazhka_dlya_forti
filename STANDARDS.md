@@ -29,6 +29,21 @@
 
 ## Будущий Windows-порт
 
+## Дополнение 1.4 — 23 октября 2026
+
+- [Apple SMAppService](https://developer.apple.com/documentation/servicemanagement/smappservice/mainapp):
+  opt-in login item с реальным системным статусом и видимой ошибкой, без скрытого
+  launchd-автозапуска маршрутов.
+- [NSRunningApplication.hide](https://developer.apple.com/documentation/appkit/nsrunningapplication/hide()):
+  скрывать Forti штатным API вместо Accessibility/имитации ввода; не завершать VPN.
+- SSDF PW.7/PW.8: review автомата, stale status, привязки own PID и once-only
+  side effects; UI-тесты отмены, ошибок, чужого сеанса и чтения настроек.
+- CWE-367/770: bounded descriptor read настроек с O_NOFOLLOW/fstat, 64 KiB,
+  ограничение ожидания входа. Уменьшение поставки проверяет идентичность удаляемых
+  дублей и не меняет байты рабочего интерпретатора/stdlib.
+
+### Основа Windows
+
 Изучены первичные Microsoft-документы: [CreateIpForwardEntry2](https://learn.microsoft.com/en-us/windows/win32/api/netioapi/nf-netioapi-createipforwardentry2),
 [безопасность named pipes](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights),
 [проверка impersonation](https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-impersonatenamedpipeclient).

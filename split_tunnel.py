@@ -268,7 +268,7 @@ class Controller:
             conn.settimeout(1)
             try:
                 value = conn.recv(32).decode("ascii").strip()
-                response = {"state": self.state, "report": str(self.report_path)}
+                response = {"state": self.state, "report": str(self.report_path), "pid": os.getpid()}
                 conn.sendall((json.dumps(response) + "\n").encode("utf-8"))
                 return value == "stop"
             except (OSError, UnicodeError):
