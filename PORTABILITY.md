@@ -17,16 +17,24 @@ desktop_entry → platform_contract → platform_adapters
 root-службу. `profile_store` — отдельный **macOS/POSIX** адаптер хранения, а не
 готовое Windows-хранилище. Unix-guardian также остаётся явно платформенным.
 `DesktopBackend` задаёт точку диспетчеризации; Windows-адаптер пока возвращает
-`supported: false`. Это основа порта, **не Windows-приложение**.
+`supported: false` для route engine. Он по-прежнему не переносит macOS-команды.
+
+Отдельный нативный **Windows Companion 0.1** находится в `windows/` (WinForms/.NET).
+Это ограниченный launcher без root/admin службы и изменения маршрутов: штатный
+Forti/MFA, проверка выбранного Fortinet NIC + GetBestInterface + TCP,
+однократный запуск RDP/TrueConf, настройки, opt-in login и трей. Он не использует
+Unix-backend и не обещает исправления full tunnel. Свой Windows settings store
+использует SID/DACL, не POSIX chmod. Детали — [windows/README.md](windows/README.md).
 
 Тест переносимого ядра отдельно: `python -B -m unittest -q test_portable_core`.
-В текущей работе он выполнен на Intel Mac; реальный Windows CI/ноутбук ещё не
-использовался. Эмуляция выбора платформы не равна испытанию на Windows.
+Он выполнен на Intel Mac и Windows CI. Native Windows MVP собран и self-tested
+на Windows Server 2022 runner. Реальный пользовательский Windows 11/Forti VPN
+ещё не проверен: CI без корпоративного VPN не является сквозной приёмкой.
 
 ## Что потребуется Windows-адаптеру
 
-1. Свой UI, использующий тот же профиль и состояния мастера; Swift/AppKit не
-   переносится напрямую. Выбор Windows UI-технологии остаётся отдельным решением.
+1. Свой UI уже выбран: WinForms/.NET для ограниченного Companion; Swift/AppKit
+   не переносится напрямую. Полный route engine требует дальнейшей реализации.
 2. Раздельные UI и узкая привилегированная Windows-служба с явным UAC при установке.
    Не передавать пароль в UI и не исполнять PowerShell/cmd из профиля.
 3. Маршруты через Windows IP Helper API с InterfaceLuid/Index, метриками и
@@ -46,7 +54,8 @@ root-службу. `profile_store` — отдельный **macOS/POSIX** ада
 | Intel Mac, macOS 14 | Локальная сборка/автотесты/UI проверены; новая GUI VPN-приёмка остаётся ручной |
 | macOS 13 и другие более новые macOS на Intel | Заявленный минимум 13, но конкретные версии требуют приёмки; не обещаем универсальность |
 | macOS 12 и старше | Не поддерживается этим GUI-выпуском |
-| Windows / Linux / Apple Silicon | Нет готовой версии; Windows имеет только каркас безопасного отказа, Rosetta не проверялась |
+| Windows 11 x64 | Companion 0.1: нативный launcher без изменения маршрутов; Windows CI есть, реальная VPN-приёмка pending |
+| Windows route engine / Linux / Apple Silicon | Полного route-порта нет; Python Windows backend отвечает unsupported, Rosetta не проверялась |
 | Wi-Fi или Ethernet с именем enN | Интерфейс/шлюз определяются динамически, en0 не зашит в маршрутный spec |
 | VLAN/bridge/PPP, IPv6-only, без обычного IPv4-шлюза | Безопасный отказ, а не попытка угадать маршрут |
 | FortiClient SSL VPN с однозначным utun/IPv4-сервером | Текущий поддерживаемый механизм; разные версии/EMS требуют проверки |

@@ -1,4 +1,4 @@
-"""Portable platform boundary. Windows is an explicit non-operational future port."""
+"""Route-engine boundary. Windows Companion is a separate, read-only native adapter."""
 from dataclasses import asdict, dataclass
 import platform
 from typing import Protocol, Sequence
@@ -28,7 +28,7 @@ def describe(system=None, architecture=None, version=None):
     system = platform.system() if system is None else system
     architecture = platform.machine() if architecture is None else architecture
     if system == "Windows":
-        return PlatformInfo(system, architecture, False, "Windows-порт пока не реализован. Сетевые команды не выполняются.",
+        return PlatformInfo(system, architecture, False, "Windows route engine пока не реализован. Используйте отдельный Companion для запуска клиентов; маршруты он не меняет.",
                             "planned: IP Helper API", "planned: authenticated local named pipe")
     if system != "Darwin":
         return PlatformInfo(system, architecture, False, "Поддерживается только macOS Intel. Эта платформа пока не реализована.", "none", "none")

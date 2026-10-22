@@ -1,8 +1,15 @@
-# Forti Split — Intel Mac
+# Forti Split — Intel Mac и Windows Companion
 
 Небольшое macOS-приложение для одновременной работы FortiClient VPN и обычного
 интернета. Рабочие IPv4-адреса остаются в VPN, остальной IPv4-трафик направляется
 через физический сетевой шлюз. Это разделение **по адресам, не по приложениям**.
+
+Для Windows есть отдельный ограниченный
+[Companion 0.1 Preview](https://github.com/RelakRE/catalazhka_dlya_forti/releases/tag/windows-v0.1.0):
+FortiClient/MFA → проверка рабочего пути → RDP/TrueConf, настройки и трей.
+**Он не меняет маршруты и не устраняет потерю интернета при full-tunnel VPN.**
+[Инструкция и границы Windows](windows/README.md), [Windows review](windows/REVIEW.md).
+Далее на этой странице описана Intel-версия.
 
 ## Скачать и запустить
 

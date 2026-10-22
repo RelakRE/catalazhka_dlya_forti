@@ -44,6 +44,16 @@
 
 ### Основа Windows
 
+В 0.1 Companion реализован отдельный WinForms adapter, asInvoker и self-contained
+.NET. [WinForms](https://learn.microsoft.com/dotnet/desktop/winforms/overview/),
+[GetBestInterface](https://learn.microsoft.com/windows/win32/api/iphlpapi/nf-iphlpapi-getbestinterface),
+[mstsc](https://learn.microsoft.com/windows-server/administration/windows-commands/mstsc),
+[Run keys](https://learn.microsoft.com/windows/win32/setupapi/run-and-runonce-registry-keys)
+применены буквально: read-only обнаружение пути, отдельные аргументы без shell,
+ограниченная собственная opt-in запись HKCU. Исходники и результаты внутреннего
+ревью — [windows/REVIEW.md](windows/REVIEW.md). Route-API ниже пока относятся
+к будущей привилегированной части, не к текущему launcher.
+
 Изучены первичные Microsoft-документы: [CreateIpForwardEntry2](https://learn.microsoft.com/en-us/windows/win32/api/netioapi/nf-netioapi-createipforwardentry2),
 [безопасность named pipes](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights),
 [проверка impersonation](https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-impersonatenamedpipeclient).

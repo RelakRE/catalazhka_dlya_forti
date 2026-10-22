@@ -30,13 +30,16 @@ public static class WindowsIntegration
     public static bool HasVpnRoute(WorkplaceSettings settings)
     {
         var adapter = NetworkInterface.GetAllNetworkInterfaces().SingleOrDefault(x => x.Id == settings.AdapterId);
-        if (adapter is null || !IsFortinet(adapter) || adapter.OperationalStatus != OperationalStatus.Up) return false;
-        if (!adapter.GetIPProperties().UnicastAddresses.Any(x => x.Address.AddressFamily == AddressFamily.InterNetwork
-            && !IPAddress.IsLoopback(x.Address) && x.Address.GetAddressBytes()[0] != 169)) return false;
+        if (adapter is null) return false;
+        bool fortinet = IsFortinet(adapter), up = adapter.OperationalStatus == OperationalStatus.Up;
+        bool ipv4 = adapter.GetIPProperties().UnicastAddresses.Any(x => x.Address.AddressFamily == AddressFamily.InterNetwork
+            && !IPAddress.IsLoopback(x.Address) && x.Address.GetAddressBytes()[0] != 169);
+        if (!fortinet || !up || !ipv4) return WorkplaceRun.Eligible(up, fortinet, ipv4, false, true);
         var bytes = IPAddress.Parse(settings.ProbeAddress).GetAddressBytes();
         var index = adapter.GetIPProperties().GetIPv4Properties()?.Index;
-        return index.HasValue && GetBestInterface(BitConverter.ToUInt32(bytes), out var best) == 0
+        bool routed = index.HasValue && GetBestInterface(BitConverter.ToUInt32(bytes), out var best) == 0
             && best == (uint)index.Value;
+        return WorkplaceRun.Eligible(up, fortinet, ipv4, routed, true);
     }
 
     public static async Task<bool> ConfirmEndpoint(WorkplaceSettings settings, CancellationToken cancellation)
