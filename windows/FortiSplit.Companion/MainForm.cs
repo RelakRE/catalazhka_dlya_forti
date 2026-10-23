@@ -12,6 +12,21 @@ public sealed class MainForm : Form
     private CancellationTokenSource? cancellation;
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 4000 };
     private bool checking, exiting, readyWasLost;
+    private string diagnosticText = "";
+
+    private void Failure(string message, Exception exception)
+    {
+        diagnosticText += Environment.NewLine + exception;
+        if (diagnosticText.Length > 16000) diagnosticText = diagnosticText[^16000..];
+        error.Text = message + " Подробности — в журнале.";
+    }
+
+    private void ConnectionLost()
+    {
+        run.Cancel(); cancellation?.Cancel(); readyWasLost = true;
+        error.Text = "";
+        detail.Text = "VPN отключён или маршрут изменился. Нажмите «Начать работу», чтобы открыть FortiClient и подключиться заново.";
+    }
     private int wizardStep;
     private readonly TabControl tabs = new() { Dock = DockStyle.Fill };
     private readonly Label title = Label("Готово к началу работы", 21);
@@ -47,7 +62,7 @@ public sealed class MainForm : Form
         if (!testMode)
         {
             try { settings = store.Load() ?? settings; }
-            catch (Exception ex) { error.Text = "Настройки не прочитаны: " + ex.Message; }
+            catch (Exception ex) { Failure("Настройки не прочитаны. Проверьте их на вкладке настроек.", ex); }
         }
         Text = "Forti Split — Windows Companion Preview";
         ClientSize = new Size(690, 650); MinimumSize = new Size(650, 600);
@@ -66,8 +81,8 @@ public sealed class MainForm : Form
         minimize.Checked = settings.MinimizeForti;
         if (!testMode)
         {
-            try { RefreshAdapters(); } catch (Exception ex) { error.Text = "Не удалось получить адаптеры: " + ex.Message; }
-            try { login.Checked = WindowsIntegration.LoginEnabled(); } catch (Exception ex) { error.Text = "Не удалось прочитать настройку автозапуска: " + ex.Message; }
+            try { RefreshAdapters(); } catch (Exception ex) { Failure("Не удалось получить сетевые адаптеры.", ex); }
+            try { login.Checked = WindowsIntegration.LoginEnabled(); } catch (Exception ex) { Failure("Не удалось прочитать настройку автозапуска.", ex); }
         }
         var menu = new ContextMenuStrip();
         menu.Items.Add("Открыть", null, (_, _) => ShowWork());
@@ -92,16 +107,23 @@ public sealed class MainForm : Form
     {
         var chooseForti = Button("Выбрать FortiClient.exe…"); chooseForti.Click += (_, _) => Choose(forti, "Приложение|*.exe");
         var refresh = Button("Обновить список адаптеров"); refresh.Click += (_, _) =>
-        { try { RefreshAdapters(); } catch (Exception ex) { error.Text = "Не удалось получить адаптеры: " + ex.Message; tabs.SelectedIndex = 0; UpdateView(); } };
+        { try { RefreshAdapters(); } catch (Exception ex) { Failure("Не удалось получить сетевые адаптеры.", ex); tabs.SelectedIndex = 0; UpdateView(); } };
         var chooseRdp = Button("Выбрать доверенный .rdp-файл…"); chooseRdp.Click += (_, _) => Choose(rdp, "Подключение RDP|*.rdp");
         var chooseTrue = Button("Выбрать TrueConf.exe…"); chooseTrue.Click += (_, _) => Choose(trueConf, "Приложение|*.exe");
         var save = Button("Сохранить настройки"); save.Click += (_, _) => SaveConfiguration();
+        var log = Button("Журнал последней ошибки…"); log.Click += (_, _) =>
+        {
+            using var window = new Form { Text = "Диагностика — только на этом компьютере", ClientSize = new Size(650, 400) };
+            window.Controls.Add(new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true,
+                ScrollBars = ScrollBars.Both, WordWrap = false, Text = diagnosticText.Length == 0 ? "Ошибок не было." : diagnosticText });
+            window.ShowDialog(this);
+        };
         configuration.Controls.AddRange([Label("Настройки рабочего места", 20),
             Label("Клиенты устанавливаются отдельно. Выбирайте только доверенные локальные приложения и RDP-файлы. Не добавляйте пароли в эти настройки.", 11),
             Label("FortiClient", 13), forti, chooseForti, Label("Адаптер Fortinet", 13), adapter, refresh,
             Label("Контрольный IPv4 рабочего сервера и TCP-порт", 13), probe, port,
             Label("Например, адрес вашего RDP и его порт. Запуск разрешён только когда маршрут к нему проходит через выбранный адаптер и TCP-подключение успешно. Если адаптер не определяется, автоматический запуск недоступен.", 11),
-            rdpAuto, rdp, chooseRdp, trueAuto, trueConf, chooseTrue, minimize, login, save,
+            rdpAuto, rdp, chooseRdp, trueAuto, trueConf, chooseTrue, minimize, login, save, log,
             Label("Companion не закрывает RDP/звонки, не отключает VPN автоматически и не меняет FortiGate/EMS, DNS, маршруты или защитные политики.", 11)]);
     }
 
@@ -142,7 +164,7 @@ public sealed class MainForm : Form
             error.Text = ""; tabs.SelectedIndex = 0;
             UpdateView(); return true;
         }
-        catch (Exception ex) { error.Text = ex.Message; tabs.SelectedIndex = 0; UpdateView(); return false; }
+        catch (Exception ex) { Failure("Настройки не сохранены. Проверьте файлы, адаптер и адрес сервера.", ex); tabs.SelectedIndex = 0; UpdateView(); return false; }
     }
 
     private void PrimaryAction()
@@ -153,7 +175,7 @@ public sealed class MainForm : Form
             bool wasReady = run.Phase == RunPhase.Ready;
             run.Cancel(); cancellation?.Cancel();
             detail.Text = wasReady ? "Рабочие приложения не закрывались. Отключите VPN в FortiClient, когда закончите работу." : "Запуск отменён. VPN и открытые приложения не изменялись.";
-            if (wasReady && !testMode) { try { WindowsIntegration.OpenExecutable(settings.FortiPath); } catch (Exception ex) { error.Text = ex.Message; } }
+            if (wasReady && !testMode) { try { WindowsIntegration.OpenExecutable(settings.FortiPath); } catch (Exception ex) { Failure("FortiClient не открылся.", ex); } }
             UpdateView(); return;
         }
         try
@@ -165,7 +187,7 @@ public sealed class MainForm : Form
             run.Begin(DateTimeOffset.UtcNow);
             WindowsIntegration.OpenExecutable(settings.FortiPath);
         }
-        catch (Exception ex) { run.Cancel(); error.Text = ex.Message; }
+        catch (Exception ex) { run.Cancel(); Failure("Запуск не выполнен. Проверьте FortiClient и настройки.", ex); }
         UpdateView();
     }
 
@@ -192,7 +214,7 @@ public sealed class MainForm : Form
             }
             error.Text = "";
         }
-        catch (Exception ex) { error.Text = ex.Message; }
+        catch (Exception ex) { Failure("Не удалось перейти дальше. Проверьте поля текущего шага.", ex); }
         UpdateView();
     }
 
@@ -207,20 +229,20 @@ public sealed class MainForm : Form
             if (run.Phase == RunPhase.Ready)
             {
                 if (!WindowsIntegration.HasVpnRoute(snapshot))
-                { run.Cancel(); readyWasLost = true; error.Text = "VPN или маршрут изменился. Автоматического переподключения нет; проверьте FortiClient."; }
+                { ConnectionLost(); }
             }
             else if (await WindowsIntegration.ConfirmEndpoint(snapshot, cancellation?.Token ?? CancellationToken.None)
                      && run.Confirm(id))
             {
                 var failures = new List<string>();
                 if (snapshot.MinimizeForti) { try { WindowsIntegration.MinimizeForti(snapshot.FortiPath); } catch { failures.Add("FortiClient не удалось свернуть; VPN не отключался."); } }
-                if (snapshot.LaunchTrueConf) { try { WindowsIntegration.OpenExecutable(snapshot.TrueConfPath); } catch (Exception ex) { failures.Add("TrueConf: " + ex.Message); } }
-                if (snapshot.LaunchRdp) { try { WindowsIntegration.OpenRdp(snapshot.RdpPath); } catch (Exception ex) { failures.Add("RDP: " + ex.Message); } }
+                if (snapshot.LaunchTrueConf) { try { WindowsIntegration.OpenExecutable(snapshot.TrueConfPath); } catch (Exception ex) { Failure("TrueConf не открылся.", ex); failures.Add(error.Text); } }
+                if (snapshot.LaunchRdp) { try { WindowsIntegration.OpenRdp(snapshot.RdpPath); } catch (Exception ex) { Failure("RDP не открылся.", ex); failures.Add(error.Text); } }
                 error.Text = string.Join(Environment.NewLine, failures);
             }
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { if (id == run.Id) { run.Cancel(); error.Text = "Проверка не завершилась: " + ex.Message; } }
+        catch (Exception ex) { if (id == run.Id) { ConnectionLost(); Failure("Не удалось проверить VPN. Повторите запуск.", ex); } }
         finally { checking = false; if (!IsDisposed) UpdateView(); }
     }
 
@@ -247,7 +269,7 @@ public sealed class MainForm : Form
         else
         {
             if (SharedControls().Any(control => !configuration.Controls.Contains(control))) RestoreConfiguration();
-            title.Text = run.Phase == RunPhase.Ready ? "Рабочий VPN подтверждён" : run.Phase == RunPhase.Waiting ? "Ожидаем вход в FortiClient" : "Готово к началу работы";
+            title.Text = run.Phase == RunPhase.Ready ? "Рабочий VPN подтверждён" : run.Phase == RunPhase.Waiting ? "Ожидаем вход в FortiClient" : readyWasLost ? "Соединение завершено" : "Готово к началу работы";
             primary.Text = run.Phase == RunPhase.Ready ? "Завершить работу" : run.Phase == RunPhase.Waiting ? "Отменить запуск" : "Начать работу";
             if (run.Phase == RunPhase.Waiting) detail.Text = "Завершите вход с кодом iPhone в FortiClient. Проверим маршрут через выбранный адаптер и доступность рабочего TCP-порта, затем один раз откроем выбранные программы.";
             else if (run.Phase == RunPhase.Ready) detail.Text = "Выбранные программы получили команду запуска. Это не подтверждает вход в RDP или качество звонка. Интернет зависит от VPN-политики; разделения маршрутов в этой версии нет.";
@@ -304,6 +326,17 @@ public sealed class MainForm : Form
     }
     public bool TestHasTabs => tabs.TabCount == 2;
     public bool TestSafeDefaults => !rdpAuto.Checked && !trueAuto.Checked && run.Phase == RunPhase.Idle;
+    public bool TestDisconnect()
+    {
+        run.Begin(DateTimeOffset.UtcNow); run.Confirm(run.Id); UpdateView();
+        ConnectionLost(); UpdateView();
+        bool idle = run.Phase == RunPhase.Idle && primary.Text == "Начать работу" && title.Text == "Соединение завершено"
+            && detail.Text.Contains("заново") && error.Text.Length == 0 && configuration.Enabled;
+        Failure("Проверка не завершилась.", new IOException(new string('x', 5000)));
+        bool concise = error.Text.Length < 140 && diagnosticText.Length >= 5000;
+        error.Text = ""; readyWasLost = false; detail.Text = ""; UpdateView();
+        return idle && concise;
+    }
     public bool TestWizard()
     {
         adapter.Items.Add(new AdapterChoice("synthetic-adapter", "Test Fortinet")); adapter.SelectedIndex = 0;

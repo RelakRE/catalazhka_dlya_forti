@@ -85,6 +85,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     var launchNotice = ""
     var settingsContent: NSView?
     var vpnDisconnectPending = false
+    var connectionEnded = false
+    var installedAwaitingCheck = false
     var optionsStage: Bool {
         let stage = (state["flow"] as? [String: Any])?["stage"] as? String ?? ""
         return !preferences.setupComplete && ["network", "disconnect", "connect", "ready"].contains(stage)
@@ -407,7 +409,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
                 guard epoch == self.stateEpoch else { self.refresh(); return }
                 self.state = snapshot
                 if let message = snapshot["status_error"] as? String {
-                    self.lastError = message
+                    self.logText = String((self.logText + "\n" + message).suffix(16000))
+                    self.lastError = "Не удалось проверить состояние. Повторите проверку; подробности — в журнале."
                 }
                 self.updateUI()
                 self.advanceWorkplace()
@@ -506,7 +509,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
                 detailLabel.stringValue = "Проверим сеть, откроем FortiClient и дождёмся вашего входа с MFA. Затем включим разделение и запустим выбранные приложения."
                 primary.title = "Начать работу"
                 primary.isEnabled = !preferencesError
+                if connectionEnded {
+                    statusLabel.stringValue = "Соединение завершено"
+                    detailLabel.stringValue = "VPN отключён или сеть изменилась. Маршруты восстановлены. Нажмите «Начать работу», чтобы открыть FortiClient и подключиться заново."
+                }
             }
+        }
+        if idle && installedAwaitingCheck && flow["stage"] as? String == "access" {
+            statusLabel.stringValue = "Ожидаем системный помощник"
+            detailLabel.stringValue = "Установка завершена. Повторите проверку связи — новый запрос пароля не нужен."
+            primary.title = "Повторить проверку доступа"
+            primary.isEnabled = true
         }
         for (index, label) in stepLabels.enumerated() {
             let names = ["Профиль", "Доступ", "Запуск", "Подключение"]
@@ -528,6 +541,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
         if workplace.requested { workplace.cancel(); updateUI(); return }
         guard canStartOperation else { return }
         lastError = ""
+        connectionEnded = false
+        if installedAwaitingCheck && (state["flow"] as? [String: Any])?["stage"] as? String == "access" {
+            runTask("health"); return
+        }
         if vpnDisconnectPending && state["vpn"] as? [String: Any] != nil { openForti(); return }
         vpnDisconnectPending = false
         if optionsStage {
@@ -574,17 +591,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
         stopping = false
         logText = ""
         lastError = ""
-        output.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            if data.isEmpty { handle.readabilityHandler = nil; return }
-            let text = String(decoding: data, as: UTF8.self)
-            DispatchQueue.main.async {
-                self.logText = String((self.logText + text).suffix(16000))
-                self.refresh()
-            }
+        do { try process.run(); updateUI() }
+        catch {
+            worker = nil; workerInput = nil; workerAction = ""
+            workplace.cancel()
+            logText = error.localizedDescription
+            lastError = WorkplaceResult.error(action: action, exit: 2)
+            updateUI(); return
         }
-        process.terminationHandler = { item in
+        DispatchQueue.global(qos: .utility).async {
+            // One reader owns the pipe and drains it BEFORE completion. A
+            // terminationHandler racing readabilityHandler lost the last result.
+            var tail = Data()
+            while true {
+                let chunk = output.fileHandleForReading.availableData
+                if chunk.isEmpty { break }
+                tail.append(chunk)
+                if tail.count > 16000 { tail = tail.suffix(16000) }
+            }
+            process.waitUntilExit()
+            let resultText = String(decoding: tail, as: UTF8.self)
             DispatchQueue.main.async {
+                self.logText = resultText
                 self.workerInput?.fileHandleForWriting.closeFile()
                 self.workerInput = nil
                 self.worker = nil
@@ -592,19 +620,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
                 let wasStopping = self.stopping
                 self.stopping = false
                 self.stateEpoch += 1
-                if action == "enable" || item.terminationStatus != 0 { self.workplace.cancel() }
-                if action == "enable" && wasStopping && [0, 130].contains(item.terminationStatus) {
+                let code = process.terminationStatus
+                let outcome = action == "enable" ? WorkplaceResult.outcome(output: resultText, pid: process.processIdentifier, exit: code) : ""
+                if action == "enable" || code != 0 { self.workplace.cancel() }
+                self.launchNotice = ""
+                if outcome == "connection_ended" {
+                    self.connectionEnded = true
+                    self.vpnDisconnectPending = false
+                    self.lastError = ""
+                } else if action == "enable" && wasStopping && outcome == "stopped" {
                     self.vpnDisconnectPending = true
                     if !self.pendingQuit { self.openForti() }
                 }
-                if item.terminationStatus != 0 && item.terminationStatus != 130 {
-                    self.lastError = String(self.logText.suffix(1200))
-                    if self.lastError.isEmpty { self.lastError = "Операция не завершена. Откройте журнал в разделе обслуживания." }
+                if outcome == "recovery_required" || (code != 0 && code != 130 && outcome != "connection_ended") {
+                    self.lastError = WorkplaceResult.error(action: action, exit: outcome == "recovery_required" ? 3 : code)
                 }
+                if action == "health" && code == 0 { self.installedAwaitingCheck = false }
                 self.refresh()
                 self.updateUI()
                 if self.pendingQuit {
-                    if action == "enable" && item.terminationStatus == 3 {
+                    if action == "enable" && outcome == "recovery_required" {
                         self.pendingQuit = false
                         NSApp.reply(toApplicationShouldTerminate: false)
                         self.showWork()
@@ -612,15 +647,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
                     return
                 }
             }
-        }
-        do { try process.run(); updateUI() }
-        catch {
-            worker = nil
-            workerInput = nil
-            workerAction = ""
-            workplace.cancel()
-            lastError = error.localizedDescription
-            updateUI()
         }
     }
 
@@ -638,6 +664,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     func install(remove: Bool) {
         guard canStartOperation else {
             lastError = "Сначала завершите существующий сеанс разделения."; updateUI(); return
+        }
+        if !remove && (installedAwaitingCheck || (state["service"] as? [String: Any])?["current"] as? Bool == true) {
+            runTask("health"); return
         }
         if remove {
             let question = NSAlert()
@@ -678,8 +707,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
                 self.configuring = false
                 self.logText = String(resultText.suffix(16000))
                 if resultCode != 0 {
-                    self.lastError = resultText.contains("-128") ? "Разрешение отменено. Можно повторить этот этап." : String(resultText.suffix(1200))
+                    self.lastError = WorkplaceResult.error(action: "install", exit: resultCode, output: resultText)
                 }
+                if resultCode == 0 { self.installedAwaitingCheck = !remove }
                 self.refresh()
                 self.updateUI()
                 if resultCode == 0 && !remove { self.runTask("health") }
@@ -722,7 +752,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
         fortiURL = url
         NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
             if let error = error {
-                DispatchQueue.main.async { self.workplace.cancel(); self.lastError = error.localizedDescription; self.updateUI() }
+                DispatchQueue.main.async { self.workplace.cancel(); self.recordError("FortiClient не открылся. Проверьте установку клиента.", error); self.updateUI() }
             }
         }
     }
@@ -739,7 +769,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
         case "launch": launchWorkplaceApps()
         case "timeout": lastError = "Время ожидания VPN истекло. Маршруты автоматически не включались. Завершите вход и нажмите «Начать работу» снова."
         case "blocked":
-            lastError = (state["flow"] as? [String: Any])?["detail"] as? String ?? "Не удалось проверить готовность."
+            lastError = "Запуск остановлен. Выполните действие, указанное выше."
         default: break
         }
         updateUI()
@@ -771,7 +801,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
                     throw NSError(domain: "Workplace", code: 5, userInfo: [NSLocalizedDescriptionKey: "Windows App не найдена."])
                 }
                 NSWorkspace.shared.open([file], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration()) { _, error in
-                    if let error = error { DispatchQueue.main.async { self.lastError = "RDP не открылся: " + error.localizedDescription; self.updateUI() } }
+                    if let error = error { DispatchQueue.main.async { self.recordError("RDP не открылся. Проверьте файл и Windows App в настройках.", error); self.updateUI() } }
                 }
             } catch {
                 lastError = "Не удалось открыть выбранный RDP-файл. Разделение работает. Проверьте файл и Windows App на вкладке настроек."
@@ -793,7 +823,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
 
     func openWorkApp(_ app: URL) {
         NSWorkspace.shared.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration()) { _, error in
-            if let error = error { DispatchQueue.main.async { self.lastError = "Не удалось открыть приложение: " + error.localizedDescription; self.updateUI() } }
+            if let error = error { DispatchQueue.main.async { self.recordError("Приложение не открылось. Проверьте его установку.", error); self.updateUI() } }
         }
     }
 
@@ -814,7 +844,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     @discardableResult func persistPreferences() -> Bool {
         guard !preview else { return true }
         do { try preferences.save(settingsURL); preferencesError = false; syncPreferences(); return true }
-        catch { preferencesError = true; lastError = "Настройки не сохранены: " + error.localizedDescription; syncPreferences(); updateUI(); return false }
+        catch { preferencesError = true; recordError("Настройки не сохранены. Проверьте выбранные файлы и доступ к каталогу приложения.", error); syncPreferences(); updateUI(); return false }
     }
 
     @objc func preferenceChanged(_ sender: NSButton) {
@@ -852,7 +882,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
             if SMAppService.mainApp.status == .requiresApproval {
                 lastError = "Разрешите автозапуск Forti Split в настройках macOS → Основные → Объекты входа."
             }
-        } catch { lastError = "Автозапуск не изменён: " + error.localizedDescription }
+        } catch { recordError("Автозапуск не изменён. Проверьте «Объекты входа» в настройках macOS.", error) }
         syncPreferences(); updateUI()
     }
 
@@ -893,6 +923,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
             scroll.reflectScrolledClipView(scroll.contentView)
         }
     }
+    func recordError(_ message: String, _ error: Error) {
+        logText = String((logText + "\n" + error.localizedDescription).suffix(16000))
+        lastError = message
+    }
+
     @objc func showLog() {
         alert("Последняя операция", logText.isEmpty ? (lastError.isEmpty ? "Операций ещё не было. Отчёты остаются только на этом Mac." : lastError) : String(logText.suffix(6000)))
     }
@@ -980,6 +1015,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
         configuring = true; updateUI()
         checks["system_authorization_is_explicit"] = !primary.isEnabled && statusLabel.stringValue.contains("macOS")
         configuring = false
+        let marker = "FORTI_SPLIT_RESULT {\"schema\":1,\"action\":\"enable\",\"pid\":123,\"outcome\":\"connection_ended\"}"
+        checks["disconnect_uses_structured_own_result"] = WorkplaceResult.outcome(output: "private report\n" + marker + "\n", pid: 123, exit: 2) == "connection_ended"
+        checks["foreign_result_rejected"] = WorkplaceResult.outcome(output: marker, pid: 456, exit: 2) == "failed"
+        checks["rollback_failure_never_hidden"] = WorkplaceResult.outcome(output: marker, pid: 123, exit: 3) == "recovery_required"
+        checks["raw_output_never_becomes_user_error"] = WorkplaceResult.error(action: "enable", exit: 2, output: String(repeating: "/private/report/", count: 500)).count < 160
+        checks["cancelled_authorization_is_not_bad_password"] = WorkplaceResult.error(action: "install", exit: 1, output: "execution error: User canceled. (-128)").contains("отменено")
+        checks["installer_failure_is_not_password_failure"] = !WorkplaceResult.error(action: "install", exit: 1, output: "Traceback...").contains("Неверный пароль")
+        connectionEnded = true; updateUI()
+        checks["disconnect_offers_new_start_without_error"] = primary.title == "Начать работу" && statusLabel.stringValue == "Соединение завершено" && detailLabel.stringValue.contains("заново")
+        connectionEnded = false
+        state["flow"] = ["stage": "access"]; installedAwaitingCheck = true; updateUI()
+        checks["installed_helper_retries_without_password"] = primary.title == "Повторить проверку доступа" && primary.isEnabled
+        installedAwaitingCheck = false; setPreview(stage: "ready")
         var run = WorkplaceRun()
         checks["idle_never_changes_network"] = run.next(stage: "ready", active: false, ownsSession: false, busy: false) == nil
         let start = Date()

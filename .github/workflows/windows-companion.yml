@@ -1,7 +1,7 @@
 name: Windows Companion
 on:
   push:
-    branches: [main, codex/windows-companion]
+    branches: [main, codex/windows-companion, codex/disconnect-and-errors]
     paths: ['windows/**', '.github/workflows/windows-companion.yml', 'profile_model.py', 'platform_contract.py', 'platform_adapters.py', 'setup_flow.py', 'desktop_entry.py', 'json_codec.py', 'test_portable_core.py']
   workflow_dispatch:
 permissions:
@@ -55,7 +55,7 @@ jobs:
           $evidence | Add-Member -NotePropertyName runtime_licenses_in_archive -NotePropertyValue $true
           $evidence | Add-Member -NotePropertyName runtime_license_files -NotePropertyValue @($licenseFiles | ForEach-Object { [IO.Path]::GetRelativePath($licenseDirectory.FullName, $_.FullName) })
           $evidence | ConvertTo-Json -Depth 8 | Set-Content build/WINDOWS-VALIDATION.json -Encoding utf8NoBOM
-          Compress-Archive -Path build/windows-publish/* -DestinationPath build/windows-assets/Forti-Split-Companion-0.1.0-Windows-x64.zip -CompressionLevel Optimal
+          Compress-Archive -Path build/windows-publish/* -DestinationPath build/windows-assets/Forti-Split-Companion-0.1.1-Windows-x64.zip -CompressionLevel Optimal
           Copy-Item build/WINDOWS-VALIDATION.json,build/Windows-Companion*.png build/windows-assets/
           $releaseHashes = Get-ChildItem build/windows-assets -File | Sort-Object Name | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $_.Name }
           [IO.File]::WriteAllText((Join-Path $PWD 'build/windows-assets/SHA256SUMS.txt'), ([string]::Join("`n", $releaseHashes) + "`n"), [Text.UTF8Encoding]::new($false))

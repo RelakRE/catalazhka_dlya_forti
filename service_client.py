@@ -49,6 +49,22 @@ def status():
         return {"installed": False, "message": str(exc)}
 
 
+def wait_current(expected_digest, timeout=20, clock=time.monotonic, sleep=time.sleep):
+    """launchctl bootstrap returns before launchd has opened the helper socket.
+
+    Retry only read-only discovery, never installation, authorization or routes.
+    A live different helper is not considered ready.
+    """
+    deadline = clock() + timeout
+    while True:
+        result = status()
+        if result.get("installed") and result.get("digest") == expected_digest:
+            return result
+        if clock() >= deadline:
+            raise base.ProbeError("Системный помощник ещё не готов. Повторите проверку доступа без переустановки.")
+        sleep(min(0.25, max(0, deadline - clock())))
+
+
 class ServiceGuardian:
     def __init__(self, spec, events, mode="lease"):
         self.conn = connect()

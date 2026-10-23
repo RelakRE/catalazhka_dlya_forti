@@ -138,7 +138,10 @@ def main(arguments=None):
             if service.get("installed") and app.recover(service=True) != 0:
                 return 3
             return app.prepare()
-        service = service_client.status()
+        # Installation can have succeeded while launchd is still starting. Do
+        # not mistake socket startup latency for a rejected system password.
+        service = (service_client.wait_current(service_paths.digest(app.ROOT))
+                   if args.action == "health" else service_client.status())
         if args.action == "recover" and service.get("installed"):
             return app.recover(service=True)
         if not service.get("installed") or service.get("digest") != service_paths.digest(app.ROOT):

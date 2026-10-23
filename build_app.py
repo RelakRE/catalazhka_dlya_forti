@@ -16,7 +16,7 @@ import bundle_runtime
 
 ROOT = Path(__file__).resolve().parent
 APP = ROOT / "dist/Forti Split Intel.app"
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 
 
 def sign(path, identity):

@@ -77,3 +77,38 @@ struct WorkplaceRun {
         }
     }
 }
+
+enum WorkplaceResult {
+    static func outcome(output: String, pid: Int32, exit: Int32) -> String {
+        // An unconfirmed rollback must never be hidden by a success marker.
+        if exit == 3 { return "recovery_required" }
+        guard let line = output.split(separator: "\n").last,
+              line.hasPrefix("FORTI_SPLIT_RESULT "), line.utf8.count < 4096,
+              let value = try? JSONSerialization.jsonObject(with: Data(line.dropFirst(19).utf8)) as? [String: Any],
+              value["schema"] as? Int == 1, value["action"] as? String == "enable",
+              (value["pid"] as? NSNumber)?.int32Value == pid,
+              let result = value["outcome"] as? String,
+              ["stopped", "connection_ended", "recovery_required", "failed"].contains(result) else { return "failed" }
+        return result
+    }
+
+    static func error(action: String, exit: Int32, output: String = "") -> String {
+        if action == "install" {
+            // AppleScript -128 is a system authorization cancellation, not a
+            // password-validation result. No credentials enter this process.
+            if output.range(of: #"\(-128\)\s*$"#, options: .regularExpression) != nil {
+                return "Разрешение отменено. Повторите, когда будете готовы."
+            }
+            return "Системный доступ не настроен. Подробности — в журнале; это не обязательно ошибка пароля."
+        }
+        if exit == 3 { return "Откат не подтверждён. Нажмите «Восстановить маршруты»; новый сеанс пока недоступен." }
+        switch action {
+        case "health": return "Помощник не готов. Повторите проверку доступа; повторный ввод пароля не требуется."
+        case "prepare": return "Не удалось проверить интернет. Отключите VPN и повторите. Подробности — в журнале."
+        case "import-profile": return "Профиль не принят. Проверьте файл; подробности — в журнале."
+        case "recover": return "Восстановление не подтверждено. Сохраните отчёт и проверьте журнал."
+        case "enable": return "Не удалось включить разделение. Проверьте FortiClient; подробности — в журнале."
+        default: return "Операция не завершена. Подробности — в журнале."
+        }
+    }
+}

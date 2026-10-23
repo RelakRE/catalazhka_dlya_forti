@@ -25,9 +25,9 @@ internal static class Program
             Application.Run(form);
             return 0;
         }
-        catch (Exception error)
+        catch (Exception)
         {
-            MessageBox.Show("Приложение не запущено. VPN и маршруты не изменялись.\n" + error.Message, "Forti Split");
+            MessageBox.Show("Приложение не запущено. VPN и маршруты не изменялись. Проверьте доступ к настройкам и повторите запуск.", "Forti Split");
             return 1;
         }
     }

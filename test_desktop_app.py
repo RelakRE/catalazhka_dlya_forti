@@ -69,6 +69,97 @@ class UnlimitedSessionTests(unittest.TestCase):
         self.assertTrue(lease.rollback()["ok"])
 
 
+class CompletionTests(unittest.TestCase):
+    def completed(self, **extra):
+        return dict(status="complete_rolled_back", session_was_active=True, notes=[], end_event="error",
+                    rollback={"event": "rolled_back", "rollback": {"ok": True}}, **extra)
+
+    def test_active_guard_disconnect_is_not_a_gui_failure(self):
+        self.assertEqual(app.session_outcome(self.completed(exit_code=2)), "connection_ended")
+
+    def test_sleep_and_network_change_end_without_automatic_reconnect(self):
+        for event in ("lease_end", "rolled_back"):
+            value = self.completed(exit_code=2)
+            value["end_event"] = event
+            self.assertEqual(app.session_outcome(value), "connection_ended")
+
+    def test_unconfirmed_rollback_cannot_be_hidden_as_disconnect(self):
+        value = self.completed(exit_code=3)
+        value["status"] = "rollback_unconfirmed"
+        self.assertEqual(app.session_outcome(value), "recovery_required")
+        value["status"] = "complete_rolled_back"
+        value["rollback"]["rollback"]["ok"] = False
+        self.assertEqual(app.session_outcome(value), "failed")
+
+    def test_startup_failure_does_not_become_normal_disconnect(self):
+        value = self.completed(exit_code=2)
+        value.pop("session_was_active")
+        self.assertEqual(app.session_outcome(value), "failed")
+        value["session_was_active"] = True
+        value["session_failed"] = True
+        self.assertEqual(app.session_outcome(value), "failed")
+
+    def test_informational_notes_do_not_turn_disconnect_into_error(self):
+        value = self.completed(exit_code=2)
+        value["notes"] = ["IPv6 unchanged"]
+        self.assertEqual(app.session_outcome(value), "connection_ended")
+
+    def test_manual_stop_is_not_disconnect(self):
+        value = self.completed(exit_code=130)
+        value.pop("end_event")
+        value["notes"] = ["Stopped by user"]
+        self.assertEqual(app.session_outcome(value), "stopped")
+
+    def test_cold_launchd_start_retries_only_read_only_status(self):
+        expected = "a" * 64
+        with mock.patch.object(service_client, "status", side_effect=[{"installed": False},
+                {"installed": True, "digest": expected}]) as status, mock.patch.object(service_client, "connect") as connect:
+            result = service_client.wait_current(expected, clock=lambda: 0, sleep=lambda _: None)
+        self.assertTrue(result["installed"])
+        self.assertEqual(status.call_count, 2)
+        connect.assert_not_called()
+
+    def test_readiness_deadline_does_not_reinstall_or_authorize(self):
+        ticks = iter([0, 21])
+        with mock.patch.object(service_client, "status", return_value={"installed": False}), \
+             mock.patch.object(service_client, "ServiceGuardian") as guardian:
+            with self.assertRaises(helper.base.ProbeError):
+                service_client.wait_current("a" * 64, clock=lambda: next(ticks))
+        guardian.assert_not_called()
+
+    def test_different_helper_digest_never_accepted(self):
+        with mock.patch.object(service_client, "status", return_value={"installed": True, "digest": "old"}):
+            with self.assertRaises(helper.base.ProbeError):
+                service_client.wait_current("new", timeout=0)
+
+    def test_full_gui_session_reports_guard_disconnect_after_confirmed_rollback(self):
+        guardian = mock.Mock()
+        guardian.ready.return_value = {"plan": {}}
+        guardian.process.returncode = 1  # Actual guard behavior on Forti loss.
+        guardian.release.return_value = {"event": "rolled_back", "rollback": {"ok": True}}
+        controller = mock.Mock()
+        controller.stop_requested.is_set.return_value = False
+        def disconnected(guard, control, data, folder):
+            data["end_event"] = "error"
+            return "VPN disconnected"
+        with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(io.StringIO()) as output, \
+             mock.patch.object(app, "OUTPUT", Path(directory)), \
+             mock.patch.object(app, "Controller", return_value=controller), \
+             mock.patch.object(app, "load_prepared", return_value={}), \
+             mock.patch.object(app, "work_connections", return_value={"label": "test", "at": "test", "results": []}), \
+             mock.patch.object(app, "make_spec", return_value=(dict(SPEC), [])), \
+             mock.patch.object(app.helper.SplitLease, "plan", return_value={"protected_addresses": []}), \
+             mock.patch.object(app, "start_guardian", return_value=guardian), \
+             mock.patch.object(app, "acceptance", return_value=({"ok": True}, [])), \
+             mock.patch.object(app, "wait_session", side_effect=disconnected):
+            self.assertEqual(app.session(gui=True), 2)  # CLI diagnostic exit preserved.
+            line = output.getvalue().splitlines()[-1]
+            self.assertTrue(line.startswith("FORTI_SPLIT_RESULT "))
+            result = json.loads(line.removeprefix("FORTI_SPLIT_RESULT "))
+            self.assertEqual(result, {"schema": 1, "action": "enable", "pid": os.getpid(), "outcome": "connection_ended"})
+            controller.close.assert_called_once()
+
+
 class ServiceSecurityTests(unittest.TestCase):
     def setUp(self):
         self.server = privileged_service.Server(os.getuid(), ROOT)

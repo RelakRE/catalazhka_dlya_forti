@@ -354,7 +354,26 @@ def wait_session(guardian, controller, data, folder):
             event = guardian.read_event(2)
             report(data, folder)
             if event.get("event") in ("error", "lease_end", "rolled_back", "rollback_error"):
+                data["end_event"] = event["event"]
                 return event.get("reason", event.get("message", event["event"]))
+
+
+def session_outcome(data):
+    """GUI protocol, not a translation/parsing of diagnostic stdout or exit code."""
+    if data.get("status") == "rollback_unconfirmed":
+        return "recovery_required"
+    restored = (data.get("status") == "complete_rolled_back"
+                and data.get("rollback", {}).get("event") == "rolled_back"
+                and data.get("rollback", {}).get("rollback", {}).get("ok") is True)
+    if restored and data.get("session_was_active") is True and not data.get("session_failed") \
+            and data.get("exit_code") in (0, 2) \
+            and data.get("end_event") in ("error", "lease_end", "rolled_back"):
+        # The guard ends an active lease on VPN/network/sleep changes. Its exit
+        # code is deliberately nonzero; confirmed rollback is not a GUI failure.
+        return "connection_ended"
+    if restored and data.get("exit_code") in (0, 130):
+        return "stopped"
+    return "failed"
 
 
 def session(dry_run=False, gui=False):
@@ -407,6 +426,7 @@ def session(dry_run=False, gui=False):
         if not checks["ok"]:
             raise base.ProbeError("Не все проверки HTTPS/маршрутов прошли; автоматический откат.")
         data["status"] = "active_ipv4_manual_app_checks_required"
+        data["session_was_active"] = True
         report(data, folder)
         data["end_reason"] = wait_session(guardian, controller, data, folder)
         # App sockets are observations, not proof of a successful call or RDP session.
@@ -416,6 +436,7 @@ def session(dry_run=False, gui=False):
         data["notes"].append("Остановлено пользователем.")
     except Exception as exc:
         code = 2
+        data["session_failed"] = True
         data["notes"].append(probe.launch_output(str(exc)))
         print(data["notes"][-1], flush=True)
     finally:
@@ -456,6 +477,9 @@ def session(dry_run=False, gui=False):
             if controller:
                 controller.close()
         print("Результат: {}. Отчёт: {}".format(data["status"], folder / "report.txt"), flush=True)
+        if gui:
+            print("FORTI_SPLIT_RESULT " + json.dumps({"schema": 1, "action": "enable", "pid": os.getpid(),
+                                                       "outcome": session_outcome(data)}), flush=True)
     return code
 
 

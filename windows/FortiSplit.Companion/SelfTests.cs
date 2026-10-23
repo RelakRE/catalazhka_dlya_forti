@@ -53,6 +53,7 @@ internal static class SelfTests
             using var form = new MainForm(store, testMode: true, initial: valid);
             checks["two_native_tabs"] = form.TestHasTabs;
             checks["ui_does_not_start_vpn_or_apps"] = form.TestSafeDefaults;
+            checks["disconnect_resets_and_errors_are_concise"] = form.TestDisconnect();
             form.TestLayout(screenshot);
             checks["native_ui_rendered"] = File.Exists(screenshot) && new FileInfo(screenshot).Length > 1000;
             using var firstRun = new MainForm(store, testMode: true, initial: valid with { SetupComplete = false });
@@ -62,7 +63,7 @@ internal static class SelfTests
         finally { Directory.Delete(directory, true); } // Only this test's freshly created temp directory.
         var result = new
         {
-            schema = 1, version = "0.1.0", platform = "Windows", architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString(),
+            schema = 1, version = "0.1.1", platform = "Windows", architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString(),
             runtime = Environment.Version.ToString(), checks, successful = checks.Values.All(x => x),
             route_engine = "none — companion only", real_vpn_acceptance = "pending", authenticode = false,
             no_real_vpn_or_login_registration_in_tests = true

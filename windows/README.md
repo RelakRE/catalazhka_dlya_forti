@@ -85,3 +85,11 @@ feature-ветка `codex/windows-companion`, отдельные версии Wi
 [mstsc](https://learn.microsoft.com/windows-server/administration/windows-commands/mstsc),
 [GetBestInterface](https://learn.microsoft.com/windows/win32/api/iphlpapi/nf-iphlpapi-getbestinterface),
 [Run keys](https://learn.microsoft.com/windows/win32/setupapi/run-and-runonce-registry-keys).
+# Обновление 0.1.1
+
+Пропажа VPN/маршрута возвращает интерфейс к кнопке «Начать работу» с предложением
+повторного входа в FortiClient. Старое описание успешного подключения убрано.
+Ошибки краткие; «Журнал последней ошибки…» находится на вкладке настроек.
+Журнал хранится только в памяти текущего запуска. Пароли/MFA приложение не читает.
+Нет собственного запроса пароля администратора: эта версия работает asInvoker,
+а авторизацию FortiClient по-прежнему выполняет сам VPN-клиент.
