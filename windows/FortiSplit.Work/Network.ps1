@@ -99,20 +99,30 @@ try {
  if ($null -eq $script:state) { throw 'Tunnel settings unavailable' }
  # This runs AFTER the synchronous OpenConnect hook, so tunnel receive stays live.
  $script:state.Stage='resolving'; Save-State
- $resolved=@()
+ $resolved=@(); $unresolved=@(); $dnsReport=@()
  foreach ($name in @($config.Hosts)+$optionalHosts) {
-  $literal=$null; $addresses=@()
+  $literal=$null; $addresses=@(); $attempts=@()
   if ([Net.IPAddress]::TryParse($name,[ref]$literal)) { Assert-IP $name; $addresses=@($name) }
   else {
    foreach ($server in $script:state.Dns) {
-    try { $addresses=@(Resolve-DnsName -Name $name -Server $server -Type A -DnsOnly -QuickTimeout -ErrorAction Stop | Where-Object IPAddress | Select-Object -ExpandProperty IPAddress -Unique); if ($addresses.Count) { break } } catch { }
+    foreach ($tcp in @($false,$true)) {
+     try {
+      $query=@{Name=$name;Server=$server;Type='A';DnsOnly=$true;QuickTimeout=$true;ErrorAction='Stop'}
+      if ($tcp) { $query.TcpOnly=$true }
+      $addresses=@(Resolve-DnsName @query | Where-Object IPAddress | Select-Object -ExpandProperty IPAddress -Unique)
+      $attempts+=@([pscustomobject]@{Server=$server;Tcp=$tcp;Answers=$addresses.Count;Error=''})
+      if ($addresses.Count) { break }
+     } catch { $attempts+=@([pscustomobject]@{Server=$server;Tcp=$tcp;Answers=0;Error=$_.FullyQualifiedErrorId}) }
+    }
+    if ($addresses.Count) { break }
+   }
+   if (-not $addresses.Count) {
+    try { $addresses=@(Resolve-DnsName -Name $name -Type A -QuickTimeout -ErrorAction Stop | Where-Object IPAddress | Select-Object -ExpandProperty IPAddress -Unique);$attempts+=@([pscustomobject]@{Server='Windows';Tcp=$false;Answers=$addresses.Count;Error=''}) }
+    catch { $attempts+=@([pscustomobject]@{Server='Windows';Tcp=$false;Answers=0;Error=$_.FullyQualifiedErrorId}) }
    }
   }
-  if (-not $addresses.Count) {
-   if ($optionalHosts -contains $name -and @($config.Hosts) -notcontains $name) { continue }
-   throw ('Рабочее имя не разрешено: '+$name)
-  }
-  if ($addresses.Count -gt 16) { throw ('Слишком много адресов рабочего имени: '+$name) }
+  $dnsReport+=@([pscustomobject]@{Host=$name;Addresses=$addresses;Attempts=$attempts})
+  if (-not $addresses.Count -or $addresses.Count -gt 16) { $unresolved+=@($name); continue }
   foreach ($ip in $addresses) { Add-Route $ip }
   $resolved+=@([pscustomobject]@{Host=$name;Addresses=$addresses})
  }
@@ -126,6 +136,10 @@ try {
  }
  foreach ($rule in @(Get-DnsClientNrptRule | Where-Object Comment -eq $tag)) { Remove-DnsClientNrptRule -Name $rule.Name -Force }
  if ($names.Count) { Add-DnsClientNrptRule -Namespace $names -NameServers $script:state.Dns -Comment $tag -DisplayName 'Forti Split Work' | Out-Null }
+ $reportPath=Join-Path $Session 'dns-report.json'
+ if ((Test-Path -LiteralPath $reportPath) -and ((Get-Item -LiteralPath $reportPath).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'DNS report link refused' }
+ [IO.File]::WriteAllText($reportPath,(@{Utc=[DateTime]::UtcNow;Dns=$script:state.Dns;Results=$dnsReport}|ConvertTo-Json -Depth 8))
+ $script:state | Add-Member -NotePropertyName Unresolved -NotePropertyValue $unresolved -Force
  $script:state.Resolved=$resolved; $script:state.Stage='ready'; Save-State
 } catch {
  # No auth environment or secrets are written here.

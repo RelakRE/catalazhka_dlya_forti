@@ -20,8 +20,6 @@ public sealed record Config
  public string[] ExtraHosts { get; set; } = [];
  public string[] Hosts { get; set; } = [];
  public string[] OptionalHosts { get; set; } = [];
- public string ProbeHost { get; set; } = "";
- public int ProbePort { get; set; } = 443;
  public void Validate()
  {
   if (!Uri.TryCreate(Server, UriKind.Absolute, out var uri) || uri.Scheme != "https" || uri.UserInfo != "" || uri.Query != "" || uri.Fragment != "" || uri.Port is < 1 or > 65535)
@@ -30,7 +28,7 @@ public sealed record Config
   if (User.Length > 256 || User.Any(char.IsControl)) throw new ArgumentException("Проверьте логин.");
   if (AutoRdp || Rdp.Length > 0) LocalFile(Rdp, ".rdp");
   if (AutoTrueConf || TrueConf.Length > 0) { LocalFile(TrueConf, ".exe"); Host(TrueConfHost); if (TrueConfFallback.Length > 0) IPv4(TrueConfFallback); }
-  if (TrueConfPort is < 1 or > 65535 || ProbePort is < 1 or > 65535) throw new ArgumentException("Неверный порт.");
+  if (TrueConfPort is < 1 or > 65535) throw new ArgumentException("Неверный порт.");
   if (ExtraHosts.Length > 32 || Hosts.Length + OptionalHosts.Length > 40) throw new ArgumentException("Слишком много рабочих адресов.");
   foreach (string host in ExtraHosts.Concat(Hosts).Concat(OptionalHosts)) Host(host);
  }
@@ -59,24 +57,20 @@ public sealed record Config
   var fields = contents.Split('\n').Select(x => x.Trim().Split(':', 3)).Where(x => x.Length == 3)
    .GroupBy(x => x[0], StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Last()[2], StringComparer.OrdinalIgnoreCase);
   string Get(string key) => fields.GetValueOrDefault(key, "");
-  static (string Host, int Port) Endpoint(string value, int fallback) {
-   var parts = value.Split(':'); if (parts.Length > 2) throw new ArgumentException("IPv6 RDP пока не поддержан.");
-   Host(parts[0]); int port = parts.Length == 2 ? int.Parse(parts[1]) : fallback;
-   if (port is < 1 or > 65535) throw new ArgumentException("Неверный RDP-порт."); return (parts[0],port);
+  // RDP belongs to mstsc: no target validation, allowlist, DNS or TCP acceptance.
+  // Recognizable IPv4/DNS endpoints are only best-effort route hints. Short names,
+  // system gateway profiles and other RDP syntax remain untouched for Windows.
+  var hints=new List<string>();
+  void Hint(string value){
+   var parts=value.Split(':');if(parts.Length>2)return;
+   string name=parts[0].Trim();try{Host(name);}catch(ArgumentException){return;}
+   hints.Add(name);
   }
-  var address = Endpoint(Get("full address"),3389);
-  var hosts = new List<string> { address.Host }; ProbeHost = address.Host; ProbePort = address.Port; OptionalHosts = [];
-  string gatewayMode = Get("gatewayusagemethod");
-  if (gatewayMode is "1" or "2") {
-   if (Get("gatewayprofileusagemethod") == "0") throw new ArgumentException("Нужен RDP с явным профилем шлюза.");
-   var gateway = Endpoint(Get("gatewayhostname"),443); hosts.Clear(); hosts.Add(gateway.Host); ProbeHost = gateway.Host; ProbePort = gateway.Port;
-   // RD Gateway resolves the destination server itself. Detect mode can also
-   // try a direct connection, so retain a target route when VPN DNS knows it.
-   if(gatewayMode=="2"&&!address.Host.Equals(gateway.Host,StringComparison.OrdinalIgnoreCase))OptionalHosts=[address.Host];
-  }
-  else if(gatewayMode is not ("" or "0" or "4"))throw new ArgumentException("Выберите RDP с явным шлюзом или прямым подключением.");
-  Hosts = hosts.Concat(ExtraHosts).Concat(TrueConf.Length > 0 ? new[] {TrueConfHost, TrueConfFallback}.Where(x=>x.Length>0) : []).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-  OptionalHosts=OptionalHosts.Except(Hosts,StringComparer.OrdinalIgnoreCase).ToArray();
+  Hint(Get("full address"));
+  if(Get("gatewayusagemethod") is not ("0" or "4"))Hint(Get("gatewayhostname"));
+  Hosts=ExtraHosts.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+  OptionalHosts=hints.Concat(TrueConf.Length>0?new[]{TrueConfHost,TrueConfFallback}.Where(x=>x.Length>0):[])
+   .Except(Hosts,StringComparer.OrdinalIgnoreCase).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
   Validate();
  }
  public static readonly JsonSerializerOptions Json = new() { WriteIndented = true, MaxDepth = 16 };

@@ -65,5 +65,11 @@ class WorkSafety(unittest.TestCase):
         for forbidden in ('DangerousAcceptAnyServerCertificateValidator', '--no-system-trust', '--servercert', '--dump-http-traffic'):
             self.assertNotIn(forbidden, code)
 
+    def test_rdp_endpoint_does_not_gate_vpn(self):
+        worker = (SRC / 'Worker.cs').read_text(encoding='utf-8')
+        self.assertNotIn('Reachable(', worker)
+        self.assertNotIn('ProbeHost', worker)
+        self.assertIn('RdpPrecheck="disabled"', worker)
+
 if __name__ == '__main__':
     unittest.main()

@@ -20,7 +20,7 @@ function global:Get-DnsClientNrptRule { $global:fortiTestrules }
 function global:Get-DnsClientNrptPolicy { param([switch]$Effective) }
 function global:Add-DnsClientNrptRule { param($Namespace,$NameServers,$Comment,$DisplayName);$global:fortiTestrules+=@([pscustomobject]@{Name=[guid]::NewGuid().ToString();Namespace=$Namespace;Comment=$Comment}) }
 function global:Remove-DnsClientNrptRule { param($Name,[switch]$Force);$global:fortiTestrules=@($global:fortiTestrules|Where-Object Name -ne $Name) }
-function global:Resolve-DnsName { [CmdletBinding()]param($Name,$Server,$Type,[switch]$DnsOnly,[switch]$QuickTimeout);if($global:fortiTestfailResolve -or $global:fortiTestMissingNames -contains $Name){throw 'fake DNS failure'};[pscustomobject]@{IPAddress='198.51.100.80'} }
+function global:Resolve-DnsName { [CmdletBinding()]param($Name,$Server,$Type,[switch]$DnsOnly,[switch]$QuickTimeout,[switch]$TcpOnly);if($global:fortiTestfailResolve -or $global:fortiTestMissingNames -contains $Name){throw 'fake DNS failure'};[pscustomobject]@{IPAddress='198.51.100.80'} }
 function Assert($condition,$message){if(-not $condition){throw $message}}
 try {
  @{Hosts=@('desktop.example.com','gateway.example.com','video.example.com')}|ConvertTo-Json|Set-Content (Join-Path $session 'config.json')
@@ -46,8 +46,9 @@ try {
  & $network -Session $session -Mode Hook
  $global:fortiTestfailResolve=$true
  & $network -Session $session -Mode Resolve
- Assert ($LASTEXITCODE -eq 1) 'DNS failure must reject readiness'
- Assert ((Get-Content (Join-Path $session 'network.json') -Raw|ConvertFrom-Json).Stage -ne 'ready') 'Failed DNS was marked ready'
+ $s=Get-Content (Join-Path $session 'network.json') -Raw|ConvertFrom-Json
+ Assert ($s.Stage -eq 'ready' -and $s.Unresolved.Count -eq 3) 'DNS failure must not disconnect VPN'
+ Assert (Test-Path (Join-Path $session 'dns-report.json')) 'DNS diagnostics missing'
  $global:fortiTestfailResolve=$false
  $global:fortiTestfailRemove=$true
  & $network -Session $session -Mode Cleanup
@@ -66,12 +67,18 @@ try {
  Assert (@($s.Resolved|Where-Object Host -eq 'desktop.example.com').Count -eq 0) 'Unresolved target must not get DNS policy'
  Assert (@($global:fortiTestrules|Where-Object {$_.Namespace -contains 'desktop.example.com'}).Count -eq 0) 'Unresolved optional target got NRPT rule'
  & $network -Session $session -Mode Cleanup
- # Direct RDP still requires the target DNS response.
+ # Neither an unknown gateway nor direct target blocks the VPN.
+ $global:fortiTestMissingNames=@('desktop.example.com','gateway.example.com')
+ & $network -Session $session -Mode Hook
+ & $network -Session $session -Mode Resolve
+ $s=Get-Content (Join-Path $session 'network.json') -Raw|ConvertFrom-Json
+ Assert ($s.Stage -eq 'ready' -and $s.Unresolved.Count -eq 2) 'Unknown gateway must not disconnect VPN'
+ & $network -Session $session -Mode Cleanup
  @{Hosts=@('desktop.example.com');OptionalHosts=@()}|ConvertTo-Json|Set-Content (Join-Path $session 'config.json')
  & $network -Session $session -Mode Hook
  & $network -Session $session -Mode Resolve
- Assert ($LASTEXITCODE -eq 1) 'Direct RDP target DNS failure must reject readiness'
- Assert ((Get-Content (Join-Path $session 'network.json') -Raw|ConvertFrom-Json).Stage -ne 'ready') 'Direct DNS failure marked ready'
+ $s=Get-Content (Join-Path $session 'network.json') -Raw|ConvertFrom-Json
+ Assert ($s.Stage -eq 'ready' -and $s.Unresolved -contains 'desktop.example.com') 'Direct target name blocked VPN'
  & $network -Session $session -Mode Cleanup
  $global:fortiTestMissingNames=@()
  Write-Output 'NETWORK_CHECKS_PASSED: hook, deferred DNS, route deduplication, no default route, ownership, cleanup, idempotence'

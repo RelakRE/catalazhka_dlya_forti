@@ -26,7 +26,7 @@ internal sealed partial class MainForm : Form
  private static FlowLayoutPanel Column()=>new(){Dock=DockStyle.Fill,AutoScroll=true,FlowDirection=FlowDirection.TopDown,WrapContents=false,Padding=new Padding(24)};
  internal MainForm(bool preview)
  {
-  this.preview=preview; Text="Forti Split · 1.2.1"; ClientSize=new Size(820,690); MinimumSize=new Size(820,700); Font=new Font("Segoe UI",11); BackColor=Color.FromArgb(245,248,250);
+  this.preview=preview; Text="Forti Split · 1.2.2"; ClientSize=new Size(820,690); MinimumSize=new Size(820,700); Font=new Font("Segoe UI",11); BackColor=Color.FromArgb(245,248,250);
   var work=new TabPage("Работа"); var settings=new TabPage("Настройки"); tabs.TabPages.AddRange([work,settings]); Controls.Add(tabs);
   var main=Column();work.Controls.Add(main);
   main.Controls.AddRange([Label("FORTI SPLIT  /  OPENCONNECT"),state,detail,duration]);
@@ -76,7 +76,7 @@ internal sealed partial class MainForm : Form
  private void Try(Action action){try{action();}catch(Exception e){detail.Text=e.Message;MessageBox.Show(e.Message,"Forti Split");}}
  private void Choose(TextBox field,string filter){using var dialog=new OpenFileDialog{Filter=filter,CheckFileExists=true};if(dialog.ShowDialog()==DialogResult.OK)field.Text=dialog.FileName;}
  private void Apply(Config c){profile=c;server.Text=c.Server;user.Text=c.User;rdp.Text=c.Rdp;tc.Text=c.TrueConf;tcHost.Text=c.TrueConfHost;tcPort.Value=c.TrueConfPort;autoRdp.Checked=c.AutoRdp;autoTc.Checked=c.AutoTrueConf;autoConnect.Checked=c.ConnectOnOpen;rememberPassword.Checked=c.RememberPassword;extra.Text=string.Join(", ",c.ExtraHosts);}
- private Config Save(){var c=new Config{Server=server.Text.Trim(),User=user.Text.Trim(),RememberPassword=rememberPassword.Checked,Rdp=rdp.Text.Trim(),TrueConf=tc.Text.Trim(),TrueConfHost=tcHost.Text.Trim(),TrueConfFallback=tcHost.Text.Trim().Equals(profile.TrueConfHost,StringComparison.OrdinalIgnoreCase)?profile.TrueConfFallback:"",TrueConfPort=(int)tcPort.Value,AutoRdp=autoRdp.Checked,AutoTrueConf=autoTc.Checked,ConnectOnOpen=autoConnect.Checked,ExtraHosts=extra.Text.Split([',',';','\n'],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)};c.Validate();Config.LocalFile(c.Rdp,".rdp");c.PrepareRdp(File.ReadAllText(c.Rdp));SaveProfile(c);return c;}
+ private Config Save(){var c=new Config{Server=server.Text.Trim(),User=user.Text.Trim(),RememberPassword=rememberPassword.Checked,Rdp=rdp.Text.Trim(),TrueConf=tc.Text.Trim(),TrueConfHost=tcHost.Text.Trim(),TrueConfFallback=tcHost.Text.Trim().Equals(profile.TrueConfHost,StringComparison.OrdinalIgnoreCase)?profile.TrueConfFallback:"",TrueConfPort=(int)tcPort.Value,AutoRdp=autoRdp.Checked,AutoTrueConf=autoTc.Checked,ConnectOnOpen=autoConnect.Checked,ExtraHosts=extra.Text.Split([',',';','\n'],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)};c.Validate();c.PrepareRdp(c.Rdp.Length>0?File.ReadAllText(c.Rdp):"");SaveProfile(c);return c;}
  private void Start()
  {
   if(preview || worker is not null && !worker.HasExited)return;

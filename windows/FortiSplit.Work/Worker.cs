@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.Net;
-using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text.Json;
@@ -30,18 +28,6 @@ internal static class Worker
   await process.WaitForExitAsync(); await Task.WhenAll(stdout,stderr);
   return process.ExitCode;
  }
- private static async Task<bool> Reachable(JsonElement network,string host,int port)
- {
-  string source=network.GetProperty("Address").GetString()!;
-  var match=network.GetProperty("Resolved").EnumerateArray().FirstOrDefault(x=>x.GetProperty("Host").GetString()!.Equals(host,StringComparison.OrdinalIgnoreCase));
-  if (match.ValueKind != JsonValueKind.Object) return false;
-  foreach(var address in match.GetProperty("Addresses").EnumerateArray()) {
-   using var socket=new Socket(AddressFamily.InterNetwork,SocketType.Stream,ProtocolType.Tcp);
-   using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(4));
-   try { socket.Bind(new IPEndPoint(IPAddress.Parse(source),0)); await socket.ConnectAsync(IPAddress.Parse(address.GetString()!),port,timeout.Token); return true; } catch (Exception) { }
-  }
-  return false;
- }
  internal static int Run(string id,int parentId,long parentTicks,bool recovery)
  {
   string folder=Storage.SessionPath(id);
@@ -56,7 +42,7 @@ internal static class Worker
    using var parent=Process.GetProcessById(parentId);
    if(parent.StartTime.ToUniversalTime().Ticks!=parentTicks || !string.Equals(parent.MainModule?.FileName,Environment.ProcessPath,StringComparison.OrdinalIgnoreCase)) throw new IOException("Главное окно недоступно.");
    using var stop=EventWaitHandle.OpenExisting(StopName(id));
-   Config config=Storage.Read<Config>(Path.Combine(folder,"config.json")); config.Validate(); Config.Host(config.ProbeHost);
+   Config config=Storage.Read<Config>(Path.Combine(folder,"config.json")); config.Validate();
    // MinGW builds may not round-trip a Cyrillic --script path. Stage the hook
    // in this private session, which is ASCII on this machine, before connecting.
    if(folder.Any(c=>c>127)) throw new IOException("Для этой сборки OpenConnect нужен профиль Windows с латинским путём AppData.");
@@ -97,17 +83,14 @@ internal static class Worker
     if(File.Exists(path)) {
      JsonElement network=Storage.Read<JsonElement>(path); string current=network.GetProperty("Generation").GetString()!;
      if(network.GetProperty("Stage").GetString()=="base_ready" || (generation.Length>0 && DateTime.UtcNow>=refresh)) {
-      State(folder,"configuring","VPN вошёл. Настраиваем рабочие адреса и проверяем доступ…");
+      State(folder,"configuring","VPN вошёл. Настраиваем рабочий туннель…");
       if(Script(folder,"Resolve").GetAwaiter().GetResult()!=0) throw new IOException("Не удалось настроить рабочие адреса. Смотрите network-error.txt.");
       if(vpn.HasExited || parent.HasExited || stop.WaitOne(0) || consoleStop) break;
       network=Storage.Read<JsonElement>(path);
-      bool rdp=Reachable(network,config.ProbeHost,config.ProbePort).GetAwaiter().GetResult();
-      bool tc=!config.AutoTrueConf || Reachable(network,config.TrueConfHost,config.TrueConfPort).GetAwaiter().GetResult();
-      Storage.Save(Path.Combine(folder,"work-check.json"),new {Utc=DateTime.UtcNow,RdpEndpointReachable=rdp,TrueConfEndpointReachable=tc,TrueConfRequested=config.AutoTrueConf,Meaning="TCP_only_not_login_or_call"});
-      if(!rdp || !tc) throw new IOException(!rdp?"Рабочий RDP-сервер недоступен через VPN.":"Сервер TrueConf недоступен через VPN.");
+      Storage.Save(Path.Combine(folder,"work-check.json"),new {Utc=DateTime.UtcNow,RdpPrecheck="disabled",TrueConfPrecheck="disabled",Meaning="VPN_tunnel_ready_application_connectivity_not_tested"});
       if(vpn.HasExited || parent.HasExited || stop.WaitOne(0) || consoleStop) break;
       generation=current; refresh=DateTime.UtcNow.AddMinutes(2);
-      State(folder,"connected","VPN подключён. Рабочие адреса доступны; обычный интернет остаётся напрямую.",true);
+      State(folder,"connected","VPN подключён. Можно открыть RDP или TrueConf; обычный интернет остаётся напрямую.",true);
      }
     } else if(generation.Length>0) {
      State(folder,"reconnecting","Туннель временно отключён. OpenConnect пытается восстановить соединение…");

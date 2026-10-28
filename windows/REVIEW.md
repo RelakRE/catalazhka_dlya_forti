@@ -1,10 +1,11 @@
-# Review: version 1.2.1
+# Review: version 1.2.2
 
-- RD Gateway target resolution is delegated to the gateway. Detect mode retains
-  optional direct routes only when target DNS succeeds; required gateway and direct
-  RDP DNS failures still block readiness. Mode 4 correctly remains direct RDP.
-- Offline regression checks cover a missing gateway-only target, required target
-  failure, successful readiness through the gateway, and absence of stale target NRPT.
+- Neither target nor gateway DNS/TCP checks gate the VPN. RDP is passed to mstsc
+  unchanged; parsable endpoints provide best-effort route hints, without rejecting
+  short names, system gateway profiles or other Windows RDP syntax.
+- Offline regressions cover missing target and gateway DNS, all DNS queries failing,
+  VPN readiness with unresolved names, and recovery ownership. DNS tries VPN UDP,
+  VPN TCP and the Windows resolver and records a private diagnostic report.
 
 - Username persistence roundtrip and UI form prefill are covered by tests.
 - Native authentication uses public OpenConnect callbacks, not prompt scraping.

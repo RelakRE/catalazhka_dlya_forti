@@ -7,16 +7,16 @@ foreach(string host in new[]{"desktop.example.com","gateway.example.com","video.
 foreach(string host in new[]{"localhost","127.0.0.1","0.0.0.0","224.0.0.1","169.254.1.1","::1","a.com & calc.exe","a..com","http://a.com","a.com\r\n","-a.com","a-.com"})Reject("reject_"+host,()=>Config.Host(host));
 var config=new Config{Server="https://vpn.example.com",AutoRdp=false,AutoTrueConf=false};
 config.PrepareRdp("full address:s:desktop.example.com\ngatewayhostname:s:gateway.example.com\ngatewayusagemethod:i:2\ngatewayprofileusagemethod:i:1");
-Check("gateway_probe",config.ProbeHost=="gateway.example.com"&&config.ProbePort==443);
-Check("gateway_is_required_target_optional",config.Hosts.SequenceEqual(new[]{"gateway.example.com"})&&config.OptionalHosts.SequenceEqual(new[]{"desktop.example.com"}));
+Check("rdp_hosts_are_hints_only",config.Hosts.Length==0&&config.OptionalHosts.SequenceEqual(new[]{"desktop.example.com","gateway.example.com"}));
 config.PrepareRdp("full address:s:desktop.example.com\ngatewayhostname:s:gateway.example.com\ngatewayusagemethod:i:1\ngatewayprofileusagemethod:i:1");
-Check("always_gateway_does_not_resolve_target_locally",config.Hosts.SequenceEqual(new[]{"gateway.example.com"})&&config.OptionalHosts.Length==0);
-config.PrepareRdp("full address:s:192.0.2.4:3390\ngatewayusagemethod:i:0");Check("direct_rdp_port",config.ProbePort==3390&&config.ProbeHost=="192.0.2.4"&&config.Hosts.SequenceEqual(new[]{"192.0.2.4"})&&config.OptionalHosts.Length==0);
+Check("gateway_has_no_mandatory_endpoint",config.Hosts.Length==0&&config.OptionalHosts.Contains("gateway.example.com"));
+config.PrepareRdp("full address:s:192.0.2.4:3390\ngatewayusagemethod:i:0");Check("direct_rdp_is_only_route_hint",config.Hosts.Length==0&&config.OptionalHosts.SequenceEqual(new[]{"192.0.2.4"}));
 config.PrepareRdp("full address:s:desktop.example.com\ngatewayhostname:s:unused.example.com\ngatewayusagemethod:i:4");
-Check("gateway_mode_four_is_direct",config.ProbeHost=="desktop.example.com"&&config.Hosts.SequenceEqual(new[]{"desktop.example.com"}));
-Reject("system_gateway_mode_rejected",()=>config.PrepareRdp("full address:s:desktop.example.com\ngatewayusagemethod:i:3"));
-Reject("rdp_command_rejected",()=>config.PrepareRdp("full address:s:foo & calc.exe"));
-Reject("system_gateway_rejected",()=>config.PrepareRdp("full address:s:a.example\ngatewayhostname:s:b.example\ngatewayusagemethod:i:2\ngatewayprofileusagemethod:i:0"));
+Check("unused_gateway_not_routed",config.OptionalHosts.SequenceEqual(new[]{"desktop.example.com"}));
+config.PrepareRdp("full address:s:WORKSTATION-17\ngatewayusagemethod:i:3");Check("short_names_and_system_gateway_allowed",config.Hosts.Length==0&&config.OptionalHosts.Length==0);
+config.PrepareRdp("full address:s:another-pc.example.com\ngatewayhostname:s:gateway.example.com\ngatewayusagemethod:i:2\ngatewayprofileusagemethod:i:0");Check("any_target_and_system_gateway_profile_allowed",config.OptionalHosts.Contains("another-pc.example.com"));
+config.PrepareRdp("full address:s:foo & calc.exe");Check("unrecognized_endpoint_never_used_as_command_or_route",config.OptionalHosts.Length==0);
+config.PrepareRdp("");Check("vpn_without_rdp_target_allowed",config.Hosts.Length==0&&config.OptionalHosts.Length==0);
 foreach(string url in new[]{"http://vpn.example","https://a:b@vpn.example","https://vpn.example/?secret=1","https://vpn.example/#x"})Reject("server_"+url,()=>new Config{Server=url,AutoRdp=false}.Validate());
 Check("ready_only_launch",LaunchGate.CanLaunch(new("connected","ok",true),true));
 Check("no_launch_during_auth",!LaunchGate.CanLaunch(new("authenticating","wait",true),true));
@@ -28,7 +28,7 @@ try {
  File.WriteAllBytes(fakeExe,[]);
  var manualTc=new Config{Server="https://vpn.example.com",AutoRdp=false,AutoTrueConf=false,TrueConf=fakeExe,TrueConfHost="video.example.com",TrueConfFallback="192.0.2.20"};
  manualTc.PrepareRdp("full address:s:desktop.example.com");
- Check("manual_trueconf_keeps_vpn_routes",manualTc.Hosts.Contains(manualTc.TrueConfHost)&&manualTc.Hosts.Contains(manualTc.TrueConfFallback));
+ Check("manual_trueconf_keeps_vpn_route_hints",manualTc.OptionalHosts.Contains(manualTc.TrueConfHost)&&manualTc.OptionalHosts.Contains(manualTc.TrueConfFallback));
 } finally {File.Delete(fakeExe);}
 var loginProfile=new Config{User="sample.user",RememberPassword=true};
 var restoredProfile=JsonSerializer.Deserialize<Config>(JsonSerializer.Serialize(loginProfile))!;
