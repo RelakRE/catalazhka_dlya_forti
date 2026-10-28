@@ -28,11 +28,10 @@ class WorkSafety(unittest.TestCase):
         self.assertIn('VerifyClient(server,workerPid)', ui)
         self.assertIn('request.Kind=="authenticated"', ui)
 
-    def test_independent_cleanup_and_owned_process(self):
+    def test_manual_recovery_only_stops_recorded_process(self):
         code = (SRC / 'Worker.cs').read_text(encoding='utf-8')
-        self.assertIn('"--watch",id', code)
-        self.assertIn('owner.WaitForExit()', code)
-        self.assertIn('child.StartTime.ToUniversalTime().Ticks!=vpnTicks', code)
+        self.assertNotIn('--watch', code)
+        self.assertIn('child.StartTime.ToUniversalTime().Ticks!=saved.StartTicks', code)
         self.assertIn('child.MainModule?.FileName', code)
         self.assertNotIn('GetProcessesByName("Forti', code)
         self.assertNotIn('Kill(true)', code)
@@ -52,13 +51,17 @@ class WorkSafety(unittest.TestCase):
     def test_utf8_bom_for_windows_powershell(self):
         self.assertTrue((SRC / 'Network.ps1').read_bytes().startswith(b'\xef\xbb\xbf'))
 
-    def test_native_mtu_property_and_hook_failure_propagation(self):
+    def test_native_mtu_and_no_runtime_self_diagnostics(self):
         script = (SRC / 'Network.ps1').read_text(encoding='utf-8-sig')
         self.assertIn(').NlMtu;', script)
         self.assertNotIn(').NlMtuBytes', script)
         worker = (SRC / 'Worker.cs').read_text(encoding='utf-8')
-        loop = worker.split('while(!vpn.HasExited', 1)[1]
-        self.assertLess(loop.index('network-error.txt'), loop.index('if(File.Exists(path))'))
+        for removed in ('AddMinutes(', 'Preflight', 'work-check.json', 'refresh='):
+            self.assertNotIn(removed, worker)
+        ui = (SRC / 'MainForm.cs').read_text(encoding='utf-8')
+        self.assertNotIn('CheckInternet', ui)
+        self.assertNotIn('Get-DnsClientNrptPolicy', script)
+        self.assertNotIn('Existing DNS policy overlaps work names', script)
 
     def test_no_unsafe_tls_options(self):
         code = '\n'.join(p.read_text(encoding='utf-8-sig') for p in SRC.glob('*.cs'))
@@ -69,7 +72,7 @@ class WorkSafety(unittest.TestCase):
         worker = (SRC / 'Worker.cs').read_text(encoding='utf-8')
         self.assertNotIn('Reachable(', worker)
         self.assertNotIn('ProbeHost', worker)
-        self.assertIn('RdpPrecheck="disabled"', worker)
+        self.assertNotIn('RdpEndpointReachable', worker)
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,4 +1,4 @@
-﻿param([ValidateSet('Hook','Resolve','Cleanup','Preflight')][string]$Mode='Hook',[Parameter(Mandatory=$true)][string]$Session)
+﻿param([ValidateSet('Hook','Resolve','Cleanup')][string]$Mode='Hook',[Parameter(Mandatory=$true)][string]$Session)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 3
 $Session=[IO.Path]::GetFullPath($Session)
@@ -62,12 +62,7 @@ function Add-Route([string]$IP) {
 try {
  try { $locked=$mutex.WaitOne(30000) } catch [Threading.AbandonedMutexException] { $locked=$true }
  if (-not $locked) { throw 'Network operation still running' }
- if ($Mode -eq 'Preflight') {
-  if (@(Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and $_.InterfaceDescription -match 'Fortinet' }).Count) { throw 'Отключите FortiClient: новый клиент подключается вместо него.' }
-  if (@(Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and $_.Name -eq 'FortiSplitWork' }).Count) { throw 'Адаптер нового клиента уже активен. Сначала восстановите предыдущий сеанс.' }
-  Write-Output 'ok'; return
- }
- if ($Mode -eq 'Cleanup' -or ($Mode -eq 'Hook' -and $env:reason -eq 'disconnect')) { Cleanup; return }
+ if ($Mode -eq 'Cleanup') { Cleanup; return }
  if ($Mode -eq 'Hook' -and $env:reason -notin @('connect','reconnect')) { return }
  $configPath=Join-Path $Session 'config.json'
  if ((Get-Item -LiteralPath $configPath).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Config link refused' }
@@ -99,9 +94,9 @@ try {
  if ($null -eq $script:state) { throw 'Tunnel settings unavailable' }
  # This runs AFTER the synchronous OpenConnect hook, so tunnel receive stays live.
  $script:state.Stage='resolving'; Save-State
- $resolved=@(); $unresolved=@(); $dnsReport=@()
+ $resolved=@(); $unresolved=@()
  foreach ($name in @($config.Hosts)+$optionalHosts) {
-  $literal=$null; $addresses=@(); $attempts=@()
+  $literal=$null; $addresses=@()
   if ([Net.IPAddress]::TryParse($name,[ref]$literal)) { Assert-IP $name; $addresses=@($name) }
   else {
    foreach ($server in $script:state.Dns) {
@@ -110,35 +105,24 @@ try {
       $query=@{Name=$name;Server=$server;Type='A';DnsOnly=$true;QuickTimeout=$true;ErrorAction='Stop'}
       if ($tcp) { $query.TcpOnly=$true }
       $addresses=@(Resolve-DnsName @query | Where-Object IPAddress | Select-Object -ExpandProperty IPAddress -Unique)
-      $attempts+=@([pscustomobject]@{Server=$server;Tcp=$tcp;Answers=$addresses.Count;Error=''})
       if ($addresses.Count) { break }
-     } catch { $attempts+=@([pscustomobject]@{Server=$server;Tcp=$tcp;Answers=0;Error=$_.FullyQualifiedErrorId}) }
+     } catch { }
     }
     if ($addresses.Count) { break }
    }
    if (-not $addresses.Count) {
-    try { $addresses=@(Resolve-DnsName -Name $name -Type A -QuickTimeout -ErrorAction Stop | Where-Object IPAddress | Select-Object -ExpandProperty IPAddress -Unique);$attempts+=@([pscustomobject]@{Server='Windows';Tcp=$false;Answers=$addresses.Count;Error=''}) }
-    catch { $attempts+=@([pscustomobject]@{Server='Windows';Tcp=$false;Answers=0;Error=$_.FullyQualifiedErrorId}) }
+    try { $addresses=@(Resolve-DnsName -Name $name -Type A -QuickTimeout -ErrorAction Stop | Where-Object IPAddress | Select-Object -ExpandProperty IPAddress -Unique) }
+    catch { }
    }
   }
-  $dnsReport+=@([pscustomobject]@{Host=$name;Addresses=$addresses;Attempts=$attempts})
   if (-not $addresses.Count -or $addresses.Count -gt 16) { $unresolved+=@($name); continue }
   foreach ($ip in $addresses) { Add-Route $ip }
   $resolved+=@([pscustomobject]@{Host=$name;Addresses=$addresses})
  }
  # Exact work names only. Never replace home DNS or the internet default route.
  $names=@($resolved | ForEach-Object Host | Where-Object { $_ -match '[a-zA-Z]' } | Select-Object -Unique)
- foreach ($rule in @(Get-DnsClientNrptRule)+@(Get-DnsClientNrptPolicy -Effective)) {
-  if ($rule.PSObject.Properties['Comment'] -and $rule.Comment -eq $tag) { continue }
-  foreach ($ns in @($rule.Namespace)) {
-   foreach ($name in $names) { if ($ns -eq '.' -or $ns -eq $name -or ($ns.StartsWith('.') -and $name.EndsWith($ns,[StringComparison]::OrdinalIgnoreCase))) { throw 'Existing DNS policy overlaps work names' } }
-  }
- }
  foreach ($rule in @(Get-DnsClientNrptRule | Where-Object Comment -eq $tag)) { Remove-DnsClientNrptRule -Name $rule.Name -Force }
  if ($names.Count) { Add-DnsClientNrptRule -Namespace $names -NameServers $script:state.Dns -Comment $tag -DisplayName 'Forti Split Work' | Out-Null }
- $reportPath=Join-Path $Session 'dns-report.json'
- if ((Test-Path -LiteralPath $reportPath) -and ((Get-Item -LiteralPath $reportPath).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'DNS report link refused' }
- [IO.File]::WriteAllText($reportPath,(@{Utc=[DateTime]::UtcNow;Dns=$script:state.Dns;Results=$dnsReport}|ConvertTo-Json -Depth 8))
  $script:state | Add-Member -NotePropertyName Unresolved -NotePropertyValue $unresolved -Force
  $script:state.Resolved=$resolved; $script:state.Stage='ready'; Save-State
 } catch {

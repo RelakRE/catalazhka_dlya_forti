@@ -10,7 +10,7 @@ and session cookies are never saved in profiles or logs.
 
 ## Download and first launch
 
-Download the Windows preview from [Releases](https://github.com/RelakRE/catalazhka_dlya_forti/releases/tag/windows-v1.2.2).
+Download the Windows preview from [Releases](https://github.com/RelakRE/catalazhka_dlya_forti/releases/tag/windows-v1.2.3).
 Extract the complete archive and run `Forti Split.exe`. .NET is included.
 The first launch downloads and prepares upstream OpenConnect 9.21 and Wintun 0.14.1
 in a progress window, without a console. Internet and a writable app folder are
@@ -22,7 +22,7 @@ Existing complete runtimes are reused. See [release notes](RELEASE-NOTES.md).
 Windows x64, .NET SDK 10 and Windows PowerShell 5.1 are required.
 
     dotnet restore FortiSplit.Work/FortiSplit.Work.csproj
-    dotnet publish FortiSplit.Work/FortiSplit.Work.csproj -c Release --no-restore -o build/FortiSplit-1.2.2
+    dotnet publish FortiSplit.Work/FortiSplit.Work.csproj -c Release --no-restore -o build/FortiSplit-1.2.3
     dotnet run --project FortiSplit.Work.Checks -c Release
     powershell.exe -NoProfile -File test_work_network.ps1
     python -m unittest test_windows_work
@@ -47,7 +47,11 @@ Any selected local RDP file is passed unchanged to mstsc, including short comput
 names and system gateway profiles. Recognizable endpoints are best-effort route
 hints only. DNS failure for a target, gateway or other work endpoint does not stop
 the authenticated VPN tunnel; actual RDP errors are handled by the Windows client.
-The private session's `dns-report.json` records DNS attempts without auth secrets.
+Work routes and DNS are configured once on connection and on an actual OpenConnect
+reconnect. There are no periodic network diagnostics, internet probes or watchdog.
+Normal Disconnect/Exit removes the session's settings. After a crash or unexpected
+disconnect, press Restore Network: it stops only the recorded VPN process and removes
+the app's own settings. Existing profiles and private credentials are reused.
 
 For a fresh installation, open Settings, expand Advanced, set the VPN server and select
 the RDP file. Configure TrueConf if needed. Password/OTP are entered at connection time.

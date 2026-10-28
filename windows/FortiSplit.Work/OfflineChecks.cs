@@ -26,6 +26,15 @@ internal static class OfflineChecks
   using(var dialog=new AuthDialog(new("form","Login","",[new("username","User",1,[]),new("password","Password",2,[])],"_login"),new Config{User="sample.user"},null)){
    checks["login_prefilled_in_native_form"]=dialog.Controls.Cast<Control>().SelectMany(c=>c.Controls.Cast<Control>()).OfType<TextBox>().Any(c=>c.Text=="sample.user");
   }
+  string recoveryTest=Path.Combine(Path.GetTempPath(),"FortiSplitRecoveryCheck-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(recoveryTest);
+  try{
+   string image=Path.Combine(recoveryTest,"openconnect.exe");
+   Storage.Save(Path.Combine(recoveryTest,"vpn-process.json"),new{Id=Environment.ProcessId,StartTicks=0L,Image=image});
+   try{Worker.StopSavedClient(recoveryTest);checks["manual_recovery_refuses_own_process"]=false;}catch(IOException){checks["manual_recovery_refuses_own_process"]=true;}
+   Storage.Save(Path.Combine(recoveryTest,"vpn-process.json"),new{Id=int.MaxValue,StartTicks=0L,Image=image});
+   Worker.StopSavedClient(recoveryTest);checks["manual_recovery_handles_missing_process"]=true;
+  }catch(Exception){checks["manual_recovery_handles_missing_process"]=false;}
+  finally{try{Directory.Delete(recoveryTest,true);}catch{}}
   bool passed=checks.Values.All(x=>x);Storage.Save(Path.GetFullPath(output),new{Successful=passed,Checks=checks,NoVpnConnection=true});return passed?0:1;
  }
 }

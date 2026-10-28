@@ -26,7 +26,7 @@ internal sealed partial class MainForm : Form
  private static FlowLayoutPanel Column()=>new(){Dock=DockStyle.Fill,AutoScroll=true,FlowDirection=FlowDirection.TopDown,WrapContents=false,Padding=new Padding(24)};
  internal MainForm(bool preview)
  {
-  this.preview=preview; Text="Forti Split · 1.2.2"; ClientSize=new Size(820,690); MinimumSize=new Size(820,700); Font=new Font("Segoe UI",11); BackColor=Color.FromArgb(245,248,250);
+  this.preview=preview; Text="Forti Split · 1.2.3"; ClientSize=new Size(820,690); MinimumSize=new Size(820,700); Font=new Font("Segoe UI",11); BackColor=Color.FromArgb(245,248,250);
   var work=new TabPage("Работа"); var settings=new TabPage("Настройки"); tabs.TabPages.AddRange([work,settings]); Controls.Add(tabs);
   var main=Column();work.Controls.Add(main);
   main.Controls.AddRange([Label("FORTI SPLIT  /  OPENCONNECT"),state,detail,duration]);
@@ -68,7 +68,7 @@ internal sealed partial class MainForm : Form
    tray=new NotifyIcon {Icon=SystemIcons.Application,Text="Forti Split",Visible=true};
    var menu=new ContextMenuStrip(); menu.Items.Add("Открыть",null,(_,_)=>ShowWindow());menu.Items.Add("Подключить",null,(_,_)=>Try(Start));menu.Items.Add("Отключить",null,(_,_)=>RequestStop());menu.Items.Add("Выход",null,(_,_)=>Close());tray.ContextMenuStrip=menu;tray.DoubleClick+=(_,_)=>ShowWindow();
    Resize+=(_,_)=>{if(WindowState==FormWindowState.Minimized)Hide();};
-   poll.Tick+=async(_,_)=>await Poll();poll.Start();
+   poll.Tick+=(_,_)=>Poll();poll.Start();
    Shown+=(_,_)=>{if(initial.ConnectOnOpen)Try(Start);};
   }
   FormClosing+=(_,e)=>{if(worker is not null && !worker.HasExited){e.Cancel=true;closing=true;RequestStop();ShowWindow();}else{poll.Stop();CancelAuth();tray?.Dispose();stop?.Dispose();worker?.Dispose();}};
@@ -90,7 +90,7 @@ internal sealed partial class MainForm : Form
   launched=false;stopRequested=false;closing=false;connectedAt=null;status=new("preparing","Запускаем клиент VPN…");RefreshUi();
  }
  private void RequestStop(){if(worker is null || worker.HasExited)return;stopRequested=true;CancelAuth();stop?.Set();status=new("disconnecting","Ожидаем отключения и очистки сети…");RefreshUi();}
- private async Task Poll()
+ private void Poll()
  {
   if(polling || worker is null)return;polling=true;
   try {
@@ -101,18 +101,10 @@ internal sealed partial class MainForm : Form
     launched=true;connectedAt=DateTime.UtcNow;
     Config c=Storage.Read<Config>(Path.Combine(folder!,"config.json"));
     if(c.AutoRdp)LaunchApp(false);if(c.AutoTrueConf)LaunchApp(true);
-    await CheckInternet();
    }
    if(!alive && status.Stage is not ("disconnected" or "error" or "recovery_required"))status=new("error","Клиент завершился без подтверждения очистки. Нажмите «Восстановить сеть».");
    RefreshUi();if(closing && !alive){closing=false;Close();}
   }catch(Exception e){detail.Text=e.Message;}finally{polling=false;}
- }
- private async Task CheckInternet()
- {
-  if(folder is null)return;
-  string destination=folder;
-  try{using var client=new HttpClient(new HttpClientHandler{UseProxy=false}){Timeout=TimeSpan.FromSeconds(5)};using var response=await client.GetAsync("https://example.com",HttpCompletionOption.ResponseHeadersRead);Storage.Save(Path.Combine(destination,"internet-check.json"),new{Utc=DateTime.UtcNow,Status=(int)response.StatusCode,Meaning="system_route_default_TLS_HTTP_headers_only"});}
-  catch(Exception e){Storage.Save(Path.Combine(destination,"internet-check.json"),new{Utc=DateTime.UtcNow,Error=e.GetType().Name});}
  }
  private void LaunchApp(bool trueconf)
  {
@@ -125,7 +117,7 @@ internal sealed partial class MainForm : Form
  {
   if(worker is not null&&!worker.HasExited)throw new IOException("Сначала отключите текущий VPN-сеанс.");
   string sessions=Path.Combine(Storage.Root,"sessions");
-  var pending=Directory.Exists(sessions)?Directory.EnumerateFiles(sessions,"network.json",SearchOption.AllDirectories).OrderBy(File.GetLastWriteTimeUtc).ToArray():[];
+  var pending=Directory.Exists(sessions)?Directory.EnumerateFiles(sessions,"*.json",SearchOption.AllDirectories).Where(p=>Path.GetFileName(p) is "network.json" or "vpn-process.json").GroupBy(Path.GetDirectoryName).Select(g=>g.First()).OrderBy(File.GetLastWriteTimeUtc).ToArray():[];
   if(pending.Length==0){MessageBox.Show("Незавершённых сетевых изменений не найдено.",Text);return;}
   folder=Path.GetDirectoryName(pending[0])!;string id=Path.GetFileName(folder);Storage.SessionPath(id);
   var info=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=true,Verb="runas",WindowStyle=ProcessWindowStyle.Hidden};info.ArgumentList.Add("--recover");info.ArgumentList.Add(id);

@@ -9,6 +9,11 @@
 - Authentication cookies are passed to OpenConnect over stdin, never in argv or files.
   Console output is drained without logging. Native library progress text is discarded.
 - TLS validation failures are rejected. The app provides no trust-bypass checkbox.
+- Network self-diagnostics and watchdog recovery are disabled. Normal Disconnect/Exit
+  removes session changes. After an unexpected failure, use Restore Network; until
+  then, recorded routes/DNS settings and a remaining VPN process can persist.
+  Manual recovery checks the recorded PID, creation time and executable path before
+  stopping that process and removes only network settings owned by this app.
 - Profiles and session recovery metadata contain private names, IPs and local paths.
   They live in LocalAppData and must not be committed. A private export is not encrypted.
 - This portable app trusts its runtime and current user. It is not a hardened service

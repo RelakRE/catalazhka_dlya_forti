@@ -4,8 +4,6 @@ internal static class Program
  [STAThread] private static int Main(string[] args)
  {
   if(!OperatingSystem.IsWindows() || !Environment.Is64BitProcess) return 2;
-  if(args.Length==6 && args[0]=="--watch" && int.TryParse(args[2],out int owner) && long.TryParse(args[3],out long ownerTicks) && int.TryParse(args[4],out int child) && long.TryParse(args[5],out long childTicks))
-   return Worker.Watch(args[1],owner,ownerTicks,child,childTicks);
   if(args.Length==4 && args[0]=="--worker" && int.TryParse(args[2],out int pid) && long.TryParse(args[3],out long ticks))
    return Worker.Run(args[1],pid,ticks,false);
   if(args.Length==2 && args[0]=="--recover") return Worker.Run(args[1],0,0,true);

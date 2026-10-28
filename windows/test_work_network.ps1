@@ -17,7 +17,7 @@ function global:Get-NetRoute { param($InterfaceIndex,$AddressFamily,$PolicyStore
 function global:New-NetRoute { param($InterfaceIndex,$DestinationPrefix,$NextHop,$RouteMetric,$PolicyStore);$global:fortiTestroutes+=@([pscustomobject]@{InterfaceIndex=$InterfaceIndex;DestinationPrefix=$DestinationPrefix;NextHop=$NextHop;RouteMetric=$RouteMetric}) }
 function global:Remove-NetRoute { [CmdletBinding(SupportsShouldProcess=$true)]param([Parameter(ValueFromPipeline=$true)]$InputObject);process{if($global:fortiTestfailRemove){throw 'fake removal failure'};$global:fortiTestroutes=@($global:fortiTestroutes|Where-Object {$_.DestinationPrefix -ne $InputObject.DestinationPrefix -or $_.InterfaceIndex -ne $InputObject.InterfaceIndex})} }
 function global:Get-DnsClientNrptRule { $global:fortiTestrules }
-function global:Get-DnsClientNrptPolicy { param([switch]$Effective) }
+function global:Get-DnsClientNrptPolicy { param([switch]$Effective);throw 'Runtime effective-policy diagnostics must not run' }
 function global:Add-DnsClientNrptRule { param($Namespace,$NameServers,$Comment,$DisplayName);$global:fortiTestrules+=@([pscustomobject]@{Name=[guid]::NewGuid().ToString();Namespace=$Namespace;Comment=$Comment}) }
 function global:Remove-DnsClientNrptRule { param($Name,[switch]$Force);$global:fortiTestrules=@($global:fortiTestrules|Where-Object Name -ne $Name) }
 function global:Resolve-DnsName { [CmdletBinding()]param($Name,$Server,$Type,[switch]$DnsOnly,[switch]$QuickTimeout,[switch]$TcpOnly);if($global:fortiTestfailResolve -or $global:fortiTestMissingNames -contains $Name){throw 'fake DNS failure'};[pscustomobject]@{IPAddress='198.51.100.80'} }
@@ -35,6 +35,14 @@ try {
  $s=Get-Content (Join-Path $session 'network.json') -Raw|ConvertFrom-Json
  Assert ($s.Stage -eq 'ready') 'Resolution failed'
  Assert ($global:fortiTestroutes.Count -eq 3) 'Resolved address must be deduplicated'
+ # Re-applying explicit setup must not treat the app's own DNS policy as foreign.
+ & $network -Session $session -Mode Resolve
+ Assert ((Get-Content (Join-Path $session 'network.json') -Raw|ConvertFrom-Json).Stage -eq 'ready') 'Self DNS policy blocked connection'
+ $env:reason='disconnect'
+ & $network -Session $session -Mode Hook
+ Assert (Test-Path (Join-Path $session 'network.json')) 'Unexpected VPN disconnect must preserve manual recovery journal'
+ Assert ($global:fortiTestroutes.Count -eq 3) 'Disconnect hook performed automatic recovery'
+ $env:reason='connect'
  Assert (@($global:fortiTestroutes|Where-Object DestinationPrefix -eq '0.0.0.0/0').Count -eq 0) 'Unexpected internet default route'
  $global:fortiTestrules+=@([pscustomobject]@{Name='foreign';Namespace=@('other.example');Comment='other app'})
  & $network -Session $session -Mode Cleanup
@@ -48,7 +56,7 @@ try {
  & $network -Session $session -Mode Resolve
  $s=Get-Content (Join-Path $session 'network.json') -Raw|ConvertFrom-Json
  Assert ($s.Stage -eq 'ready' -and $s.Unresolved.Count -eq 3) 'DNS failure must not disconnect VPN'
- Assert (Test-Path (Join-Path $session 'dns-report.json')) 'DNS diagnostics missing'
+ Assert (-not (Test-Path (Join-Path $session 'dns-report.json'))) 'Unrequested diagnostic report created'
  $global:fortiTestfailResolve=$false
  $global:fortiTestfailRemove=$true
  & $network -Session $session -Mode Cleanup
