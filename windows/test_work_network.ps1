@@ -57,3 +57,6 @@ try {
  Assert (-not (Test-Path (Join-Path $session 'network.json'))) 'Cleanup retry failed'
  Write-Output 'NETWORK_CHECKS_PASSED: hook, deferred DNS, route deduplication, no default route, ownership, cleanup, idempotence'
 } finally { $env:LOCALAPPDATA=$originalLocalAppData }
+# Expected failure cases above set LASTEXITCODE. Reaching here means every assertion passed.
+$global:LASTEXITCODE=0
+
