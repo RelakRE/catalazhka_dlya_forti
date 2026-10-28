@@ -72,6 +72,10 @@ The UI and launched work apps retain ordinary user rights.
 Offline tests cover configuration, native ABI initialization, Credential Manager,
 private IPC and mocked network setup/recovery. They do not prove compatibility with
 every gateway or successful RDP login/video calls. A real login requires user credentials.
+During authentication, network waits are cancelled after 90 seconds; time spent
+entering a password or MFA response in the app is not counted. A private
+`auth-stage.json` records only the latest fixed phase name, step number and UTC
+timestamp, without form contents, credentials, server replies or cookies.
 Do not publish sessions, profiles, RDP files, dumps or screenshots containing work data.
 
 Public export audit:

@@ -10,6 +10,7 @@ public-release/
 release-assets/
 windows/**/bin/
 windows/**/obj/
+.local-tools/
 
 # Private profiles and credentials (all platforms)
 *.local.json

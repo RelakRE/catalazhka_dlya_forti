@@ -67,7 +67,18 @@ internal static class Worker
    if(Directory.EnumerateFiles(Path.Combine(Storage.Root,"sessions"),"*.json",SearchOption.AllDirectories).Any(p=>Path.GetDirectoryName(p)!=folder && Path.GetFileName(p) is "network.json" or "vpn-process.json")) throw new IOException("Есть незавершённый сеанс. Нажмите «Восстановить сеть».");
    if(stop.WaitOne(0) || parent.HasExited) return 0;
    State(folder,"authenticating","Введите данные входа в окне приложения.");
-   AuthSession login=AuthPipe.Login(id,parentId,config,()=>stop.WaitOne(0)||parent.HasExited);
+   int authStep=0;
+   AuthSession login=AuthPipe.Login(id,parentId,config,()=>stop.WaitOne(0)||parent.HasExited,phase=>{
+    // Fixed phase names only: never log forms, replies, credentials or cookies.
+    Storage.Save(Path.Combine(folder,"auth-stage.json"),new{Phase=phase,Step=++authStep,UpdatedUtc=DateTime.UtcNow});
+    string message=phase switch{
+     "form_requested"=>"Введите данные, запрошенные VPN, в окне приложения.",
+     "form_submitted"=>"Данные отправлены. Ожидаем ответ сервера VPN и запрос подтверждения…",
+     "cookie_obtained"=>"Сервер VPN подтвердил вход. Подготавливаем туннель…",
+     _=>"Ожидаем ответ сервера VPN…"
+    };
+    State(folder,"authenticating",message);
+   });
    if(stop.WaitOne(0)||parent.HasExited)throw new OperationCanceledException();
    if(!AllocConsole() || !SetConsoleCtrlHandler(handler,true)) throw new IOException("Не удалось подготовить VPN-процесс.");
    ShowWindow(GetConsoleWindow(),0);

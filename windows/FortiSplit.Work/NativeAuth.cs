@@ -46,11 +46,13 @@ internal static class NativeAuth
   try{return openconnect_set_protocol(info,"fortinet")==0&&openconnect_parse_url(info,"https://vpn.example.com")==0;}
   finally{openconnect_vpninfo_free(info);GC.KeepAlive(cert);GC.KeepAlive(form);GC.KeepAlive(progress);}
  }
- internal static AuthSession Authenticate(Config config,Func<AuthRequest,AuthReply> ask,Func<bool> cancelled)
+ internal static AuthSession Authenticate(Config config,Func<AuthRequest,AuthReply> ask,Func<bool> cancelled,Action<string>? stage=null)
  {
   ValidateAbi();if(WSAStartup(0x202,new byte[512])!=0)throw new IOException("Не удалось подготовить сетевой клиент.");
   if(openconnect_init_ssl()!=0){WSACleanup();throw new IOException("Не удалось подготовить TLS.");}
   bool rejectedCertificate=false;Exception? callbackFailure=null;
+  // Bound only network waits. The user may take as long as needed to enter MFA.
+  long responseDeadline=Environment.TickCount64+90000;int timedOut=0;
   Cert cert=(_,_)=>{rejectedCertificate=true;return -1;};
   ProgressCallback progress=(_,_,_)=>{};
   FormCallback formCallback=(_,pointer)=> {
@@ -69,9 +71,13 @@ internal static class NativeAuth
     }
     var request=new AuthRequest("form",Text(form.Message,2048),Text(form.Error,1024),fields.ToArray(),Text(form.Id,256));
     if(fields.Count==0)return 0;
-    AuthReply reply=ask(request);if(reply.Cancelled||cancelled())return 1;
+    Volatile.Write(ref responseDeadline,long.MaxValue);
+    AuthReply reply;
+    try{stage?.Invoke("form_requested");reply=ask(request);}
+    finally{Volatile.Write(ref responseDeadline,Environment.TickCount64+90000);}
+    if(reply.Cancelled||cancelled())return 1;
     for(int i=0;i<fields.Count;i++){if(!reply.Values.TryGetValue(fields[i].Name,out string? value)||value.Length>4096||value.Contains('\0'))throw new IOException("Неверный ответ формы.");if(openconnect_set_option_value(options[i],value)!=0)throw new IOException("Не удалось заполнить форму.");}
-    return 0;
+    stage?.Invoke("form_submitted");return 0;
    }catch(Exception e){callbackFailure=e;return -1;}
   };
   IntPtr info=openconnect_vpninfo_new("FortiSplit",cert,IntPtr.Zero,formCallback,progress,IntPtr.Zero);
@@ -79,9 +85,12 @@ internal static class NativeAuth
   using var lifetime=new CancellationTokenSource();Task? monitor=null;
   try {
    UIntPtr command=openconnect_setup_cmd_pipe(info);if(command==UIntPtr.MaxValue)throw new IOException("Не подготовлена отмена входа.");
-   monitor=Task.Run(async()=>{try{while(true){if(cancelled()){send(command,[(byte)'x'],1,0);return;}await Task.Delay(100,lifetime.Token);}}catch(OperationCanceledException){}});
+   monitor=Task.Run(async()=>{try{while(true){bool timeout=Environment.TickCount64>=Volatile.Read(ref responseDeadline);if(cancelled()||timeout){if(timeout)Interlocked.Exchange(ref timedOut,1);send(command,[(byte)'x'],1,0);return;}await Task.Delay(100,lifetime.Token);}}catch(OperationCanceledException){}});
    if(openconnect_set_protocol(info,"fortinet")!=0||openconnect_parse_url(info,config.Server)!=0)throw new IOException("Неверные параметры VPN.");
+   stage?.Invoke("contacting_server");
    int result=openconnect_obtain_cookie(info);
+   if(Volatile.Read(ref timedOut)!=0){stage?.Invoke("server_timeout");throw new IOException("Сервер VPN не завершил вход за 90 секунд. Проверьте подтверждение входа и повторите подключение. Неверный пароль не подтверждён.");}
+   stage?.Invoke(result==0?"cookie_obtained":"authentication_stopped");
    if(result!=0){if(rejectedCertificate)throw new IOException("Сертификат VPN не прошёл проверку. Подключение остановлено.");if(callbackFailure is not null)throw new IOException("Не удалось обработать форму входа.",callbackFailure);if(cancelled()||result==1)throw new OperationCanceledException();throw new IOException("Вход в VPN не выполнен, код "+result+".");}
    string cookie=Text(openconnect_get_cookie(info),65536),url=Text(openconnect_get_connect_url(info)),dns=Text(openconnect_get_dnsname(info)),address=Text(openconnect_get_hostname(info));
    if(cookie.Length==0||cookie.Contains('\n')||cookie.Contains('\r'))throw new IOException("VPN не выдал сеанс входа.");
