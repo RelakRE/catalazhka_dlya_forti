@@ -5,7 +5,7 @@ $testRoot=Join-Path $PSScriptRoot ('build\network-check-'+[guid]::NewGuid().ToSt
 $env:LOCALAPPDATA=$testRoot
 $session=Join-Path $testRoot ('Forti Split Work\sessions\'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $session -Force | Out-Null
-$global:fortiTestroutes=@();$global:fortiTestrules=@();$global:fortiTestips=@();$global:fortiTestfailResolve=$false;$global:fortiTestfailRemove=$false
+$global:fortiTestroutes=@();$global:fortiTestrules=@();$global:fortiTestips=@();$global:fortiTestfailResolve=$false;$global:fortiTestfailRemove=$false;$global:fortiTestMissingNames=@()
 $global:fortiTestadapter=[pscustomobject]@{ifIndex=77;InterfaceIndex=77;InterfaceGuid='test-guid';Name='FortiSplitWork';Status='Up';InterfaceDescription='Wintun'}
 function global:Get-NetAdapter { param($InterfaceIndex,[switch]$IncludeHidden); $global:fortiTestadapter }
 function global:Get-NetIPInterface { param($InterfaceIndex,$AddressFamily); [pscustomobject]@{NlMtu=1500} }
@@ -20,7 +20,7 @@ function global:Get-DnsClientNrptRule { $global:fortiTestrules }
 function global:Get-DnsClientNrptPolicy { param([switch]$Effective) }
 function global:Add-DnsClientNrptRule { param($Namespace,$NameServers,$Comment,$DisplayName);$global:fortiTestrules+=@([pscustomobject]@{Name=[guid]::NewGuid().ToString();Namespace=$Namespace;Comment=$Comment}) }
 function global:Remove-DnsClientNrptRule { param($Name,[switch]$Force);$global:fortiTestrules=@($global:fortiTestrules|Where-Object Name -ne $Name) }
-function global:Resolve-DnsName { [CmdletBinding()]param($Name,$Server,$Type,[switch]$DnsOnly,[switch]$QuickTimeout);if($global:fortiTestfailResolve){throw 'fake DNS failure'};[pscustomobject]@{IPAddress='198.51.100.80'} }
+function global:Resolve-DnsName { [CmdletBinding()]param($Name,$Server,$Type,[switch]$DnsOnly,[switch]$QuickTimeout);if($global:fortiTestfailResolve -or $global:fortiTestMissingNames -contains $Name){throw 'fake DNS failure'};[pscustomobject]@{IPAddress='198.51.100.80'} }
 function Assert($condition,$message){if(-not $condition){throw $message}}
 try {
  @{Hosts=@('desktop.example.com','gateway.example.com','video.example.com')}|ConvertTo-Json|Set-Content (Join-Path $session 'config.json')
@@ -55,6 +55,25 @@ try {
  $global:fortiTestfailRemove=$false
  & $network -Session $session -Mode Cleanup
  Assert (-not (Test-Path (Join-Path $session 'network.json'))) 'Cleanup retry failed'
+ # A target known only to RD Gateway must not block the gateway VPN route.
+ @{Hosts=@('gateway.example.com');OptionalHosts=@('desktop.example.com')}|ConvertTo-Json|Set-Content (Join-Path $session 'config.json')
+ $global:fortiTestMissingNames=@('desktop.example.com')
+ & $network -Session $session -Mode Hook
+ & $network -Session $session -Mode Resolve
+ $s=Get-Content (Join-Path $session 'network.json') -Raw|ConvertFrom-Json
+ Assert ($s.Stage -eq 'ready') 'Gateway-only target DNS must not block readiness'
+ Assert (@($s.Resolved|Where-Object Host -eq 'gateway.example.com').Count -eq 1) 'Gateway route missing'
+ Assert (@($s.Resolved|Where-Object Host -eq 'desktop.example.com').Count -eq 0) 'Unresolved target must not get DNS policy'
+ Assert (@($global:fortiTestrules|Where-Object {$_.Namespace -contains 'desktop.example.com'}).Count -eq 0) 'Unresolved optional target got NRPT rule'
+ & $network -Session $session -Mode Cleanup
+ # Direct RDP still requires the target DNS response.
+ @{Hosts=@('desktop.example.com');OptionalHosts=@()}|ConvertTo-Json|Set-Content (Join-Path $session 'config.json')
+ & $network -Session $session -Mode Hook
+ & $network -Session $session -Mode Resolve
+ Assert ($LASTEXITCODE -eq 1) 'Direct RDP target DNS failure must reject readiness'
+ Assert ((Get-Content (Join-Path $session 'network.json') -Raw|ConvertFrom-Json).Stage -ne 'ready') 'Direct DNS failure marked ready'
+ & $network -Session $session -Mode Cleanup
+ $global:fortiTestMissingNames=@()
  Write-Output 'NETWORK_CHECKS_PASSED: hook, deferred DNS, route deduplication, no default route, ownership, cleanup, idempotence'
 } finally { $env:LOCALAPPDATA=$originalLocalAppData }
 # Expected failure cases above set LASTEXITCODE. Reaching here means every assertion passed.

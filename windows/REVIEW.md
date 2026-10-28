@@ -1,4 +1,10 @@
-# Review: version 1.2.0
+# Review: version 1.2.1
+
+- RD Gateway target resolution is delegated to the gateway. Detect mode retains
+  optional direct routes only when target DNS succeeds; required gateway and direct
+  RDP DNS failures still block readiness. Mode 4 correctly remains direct RDP.
+- Offline regression checks cover a missing gateway-only target, required target
+  failure, successful readiness through the gateway, and absence of stale target NRPT.
 
 - Username persistence roundtrip and UI form prefill are covered by tests.
 - Native authentication uses public OpenConnect callbacks, not prompt scraping.

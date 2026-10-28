@@ -26,7 +26,7 @@ internal sealed partial class MainForm : Form
  private static FlowLayoutPanel Column()=>new(){Dock=DockStyle.Fill,AutoScroll=true,FlowDirection=FlowDirection.TopDown,WrapContents=false,Padding=new Padding(24)};
  internal MainForm(bool preview)
  {
-  this.preview=preview; Text="Forti Split · 1.2.0"; ClientSize=new Size(820,690); MinimumSize=new Size(820,700); Font=new Font("Segoe UI",11); BackColor=Color.FromArgb(245,248,250);
+  this.preview=preview; Text="Forti Split · 1.2.1"; ClientSize=new Size(820,690); MinimumSize=new Size(820,700); Font=new Font("Segoe UI",11); BackColor=Color.FromArgb(245,248,250);
   var work=new TabPage("Работа"); var settings=new TabPage("Настройки"); tabs.TabPages.AddRange([work,settings]); Controls.Add(tabs);
   var main=Column();work.Controls.Add(main);
   main.Controls.AddRange([Label("FORTI SPLIT  /  OPENCONNECT"),state,detail,duration]);

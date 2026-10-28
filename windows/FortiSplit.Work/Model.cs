@@ -19,6 +19,7 @@ public sealed record Config
  public bool ConnectOnOpen { get; set; }
  public string[] ExtraHosts { get; set; } = [];
  public string[] Hosts { get; set; } = [];
+ public string[] OptionalHosts { get; set; } = [];
  public string ProbeHost { get; set; } = "";
  public int ProbePort { get; set; } = 443;
  public void Validate()
@@ -30,8 +31,8 @@ public sealed record Config
   if (AutoRdp || Rdp.Length > 0) LocalFile(Rdp, ".rdp");
   if (AutoTrueConf || TrueConf.Length > 0) { LocalFile(TrueConf, ".exe"); Host(TrueConfHost); if (TrueConfFallback.Length > 0) IPv4(TrueConfFallback); }
   if (TrueConfPort is < 1 or > 65535 || ProbePort is < 1 or > 65535) throw new ArgumentException("Неверный порт.");
-  if (ExtraHosts.Length > 32 || Hosts.Length > 40) throw new ArgumentException("Слишком много рабочих адресов.");
-  foreach (string host in ExtraHosts.Concat(Hosts)) Host(host);
+  if (ExtraHosts.Length > 32 || Hosts.Length + OptionalHosts.Length > 40) throw new ArgumentException("Слишком много рабочих адресов.");
+  foreach (string host in ExtraHosts.Concat(Hosts).Concat(OptionalHosts)) Host(host);
  }
  public static void LocalFile(string path, string extension)
  {
@@ -64,12 +65,18 @@ public sealed record Config
    if (port is < 1 or > 65535) throw new ArgumentException("Неверный RDP-порт."); return (parts[0],port);
   }
   var address = Endpoint(Get("full address"),3389);
-  var hosts = new List<string> { address.Host }; ProbeHost = address.Host; ProbePort = address.Port;
-  if (Get("gatewayusagemethod") is "1" or "2" or "4") {
+  var hosts = new List<string> { address.Host }; ProbeHost = address.Host; ProbePort = address.Port; OptionalHosts = [];
+  string gatewayMode = Get("gatewayusagemethod");
+  if (gatewayMode is "1" or "2") {
    if (Get("gatewayprofileusagemethod") == "0") throw new ArgumentException("Нужен RDP с явным профилем шлюза.");
-   var gateway = Endpoint(Get("gatewayhostname"),443); hosts.Add(gateway.Host); ProbeHost = gateway.Host; ProbePort = gateway.Port;
+   var gateway = Endpoint(Get("gatewayhostname"),443); hosts.Clear(); hosts.Add(gateway.Host); ProbeHost = gateway.Host; ProbePort = gateway.Port;
+   // RD Gateway resolves the destination server itself. Detect mode can also
+   // try a direct connection, so retain a target route when VPN DNS knows it.
+   if(gatewayMode=="2"&&!address.Host.Equals(gateway.Host,StringComparison.OrdinalIgnoreCase))OptionalHosts=[address.Host];
   }
+  else if(gatewayMode is not ("" or "0" or "4"))throw new ArgumentException("Выберите RDP с явным шлюзом или прямым подключением.");
   Hosts = hosts.Concat(ExtraHosts).Concat(TrueConf.Length > 0 ? new[] {TrueConfHost, TrueConfFallback}.Where(x=>x.Length>0) : []).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+  OptionalHosts=OptionalHosts.Except(Hosts,StringComparer.OrdinalIgnoreCase).ToArray();
   Validate();
  }
  public static readonly JsonSerializerOptions Json = new() { WriteIndented = true, MaxDepth = 16 };

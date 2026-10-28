@@ -8,8 +8,13 @@ foreach(string host in new[]{"localhost","127.0.0.1","0.0.0.0","224.0.0.1","169.
 var config=new Config{Server="https://vpn.example.com",AutoRdp=false,AutoTrueConf=false};
 config.PrepareRdp("full address:s:desktop.example.com\ngatewayhostname:s:gateway.example.com\ngatewayusagemethod:i:2\ngatewayprofileusagemethod:i:1");
 Check("gateway_probe",config.ProbeHost=="gateway.example.com"&&config.ProbePort==443);
-Check("rdp_and_gateway_routes",config.Hosts.SequenceEqual(new[]{"desktop.example.com","gateway.example.com"}));
-config.PrepareRdp("full address:s:192.0.2.4:3390\ngatewayusagemethod:i:0");Check("direct_rdp_port",config.ProbePort==3390&&config.ProbeHost=="192.0.2.4");
+Check("gateway_is_required_target_optional",config.Hosts.SequenceEqual(new[]{"gateway.example.com"})&&config.OptionalHosts.SequenceEqual(new[]{"desktop.example.com"}));
+config.PrepareRdp("full address:s:desktop.example.com\ngatewayhostname:s:gateway.example.com\ngatewayusagemethod:i:1\ngatewayprofileusagemethod:i:1");
+Check("always_gateway_does_not_resolve_target_locally",config.Hosts.SequenceEqual(new[]{"gateway.example.com"})&&config.OptionalHosts.Length==0);
+config.PrepareRdp("full address:s:192.0.2.4:3390\ngatewayusagemethod:i:0");Check("direct_rdp_port",config.ProbePort==3390&&config.ProbeHost=="192.0.2.4"&&config.Hosts.SequenceEqual(new[]{"192.0.2.4"})&&config.OptionalHosts.Length==0);
+config.PrepareRdp("full address:s:desktop.example.com\ngatewayhostname:s:unused.example.com\ngatewayusagemethod:i:4");
+Check("gateway_mode_four_is_direct",config.ProbeHost=="desktop.example.com"&&config.Hosts.SequenceEqual(new[]{"desktop.example.com"}));
+Reject("system_gateway_mode_rejected",()=>config.PrepareRdp("full address:s:desktop.example.com\ngatewayusagemethod:i:3"));
 Reject("rdp_command_rejected",()=>config.PrepareRdp("full address:s:foo & calc.exe"));
 Reject("system_gateway_rejected",()=>config.PrepareRdp("full address:s:a.example\ngatewayhostname:s:b.example\ngatewayusagemethod:i:2\ngatewayprofileusagemethod:i:0"));
 foreach(string url in new[]{"http://vpn.example","https://a:b@vpn.example","https://vpn.example/?secret=1","https://vpn.example/#x"})Reject("server_"+url,()=>new Config{Server=url,AutoRdp=false}.Validate());

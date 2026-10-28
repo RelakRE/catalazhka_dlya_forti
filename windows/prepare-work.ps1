@@ -2,7 +2,7 @@ param([string]$ClientDirectory)
 $ErrorActionPreference='Stop'
 Set-Location -LiteralPath $PSScriptRoot
 $dotnet=Join-Path $env:ProgramFiles 'dotnet\dotnet.exe'
-$output=Join-Path $PSScriptRoot 'build\FortiSplit-1.2.0'
+$output=Join-Path $PSScriptRoot 'build\FortiSplit-1.2.1'
 if ($ClientDirectory) {
  New-Item -ItemType Directory -Path (Join-Path $output 'client') -Force | Out-Null
  foreach ($file in Get-ChildItem -LiteralPath $ClientDirectory -File | Where-Object Extension -In @('.exe','.dll','.txt')) { Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $output 'client') -Force }

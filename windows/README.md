@@ -10,7 +10,7 @@ and session cookies are never saved in profiles or logs.
 
 ## Download and first launch
 
-Download the Windows preview from [Releases](https://github.com/RelakRE/catalazhka_dlya_forti/releases/tag/windows-v1.2.0).
+Download the Windows preview from [Releases](https://github.com/RelakRE/catalazhka_dlya_forti/releases/tag/windows-v1.2.1).
 Extract the complete archive and run `Forti Split.exe`. .NET is included.
 The first launch downloads and prepares upstream OpenConnect 9.21 and Wintun 0.14.1
 in a progress window, without a console. Internet and a writable app folder are
@@ -22,7 +22,7 @@ Existing complete runtimes are reused. See [release notes](RELEASE-NOTES.md).
 Windows x64, .NET SDK 10 and Windows PowerShell 5.1 are required.
 
     dotnet restore FortiSplit.Work/FortiSplit.Work.csproj
-    dotnet publish FortiSplit.Work/FortiSplit.Work.csproj -c Release --no-restore -o build/FortiSplit-1.2.0
+    dotnet publish FortiSplit.Work/FortiSplit.Work.csproj -c Release --no-restore -o build/FortiSplit-1.2.1
     dotnet run --project FortiSplit.Work.Checks -c Release
     powershell.exe -NoProfile -File test_work_network.ps1
     python -m unittest test_windows_work
@@ -41,6 +41,12 @@ Run `./build-release.ps1` in a clean checkout to create and validate release ass
 server, local RDP file and optional TrueConf settings in the app or import a private
 JSON profile. Existing profiles under `%LOCALAPPDATA%\Forti Split Work` are reused.
 Private profile exports end in `.local.json` and must stay outside Git.
+
+For RDP files using RD Gateway, the gateway is the required VPN endpoint. The
+destination computer may be resolved by the gateway instead of the client. In
+automatic gateway mode, a direct target route is added when VPN DNS resolves it;
+missing target DNS does not prevent the gateway connection. Direct RDP still
+requires destination DNS. The selected RDP file and its destination are not edited.
 
 For a fresh installation, open Settings, expand Advanced, set the VPN server and select
 the RDP file. Configure TrueConf if needed. Password/OTP are entered at connection time.

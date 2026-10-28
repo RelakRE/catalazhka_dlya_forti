@@ -72,8 +72,9 @@ try {
  $configPath=Join-Path $Session 'config.json'
  if ((Get-Item -LiteralPath $configPath).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Config link refused' }
  $config=Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
- if (@($config.Hosts).Count -gt 40) { throw 'Host count bound' }
- foreach ($name in $config.Hosts) { Assert-Host $name }
+ $optionalHosts=@(); if ($config.PSObject.Properties['OptionalHosts']) { $optionalHosts=@($config.OptionalHosts) }
+ if (@($config.Hosts).Count + $optionalHosts.Count -gt 40) { throw 'Host count bound' }
+ foreach ($name in @($config.Hosts)+$optionalHosts) { Assert-Host $name }
  if ($Mode -eq 'Hook') {
   if ($env:TUNIDX -notmatch '^\d+$') { throw 'No tunnel adapter index' }
   $index=[int]$env:TUNIDX; $address=$env:INTERNAL_IP4_ADDRESS; Assert-IP $address
@@ -99,7 +100,7 @@ try {
  # This runs AFTER the synchronous OpenConnect hook, so tunnel receive stays live.
  $script:state.Stage='resolving'; Save-State
  $resolved=@()
- foreach ($name in $config.Hosts) {
+ foreach ($name in @($config.Hosts)+$optionalHosts) {
   $literal=$null; $addresses=@()
   if ([Net.IPAddress]::TryParse($name,[ref]$literal)) { Assert-IP $name; $addresses=@($name) }
   else {
@@ -107,12 +108,16 @@ try {
     try { $addresses=@(Resolve-DnsName -Name $name -Server $server -Type A -DnsOnly -QuickTimeout -ErrorAction Stop | Where-Object IPAddress | Select-Object -ExpandProperty IPAddress -Unique); if ($addresses.Count) { break } } catch { }
    }
   }
-  if (-not $addresses.Count -or $addresses.Count -gt 16) { throw ('Рабочее имя не разрешено: '+$name) }
+  if (-not $addresses.Count) {
+   if ($optionalHosts -contains $name -and @($config.Hosts) -notcontains $name) { continue }
+   throw ('Рабочее имя не разрешено: '+$name)
+  }
+  if ($addresses.Count -gt 16) { throw ('Слишком много адресов рабочего имени: '+$name) }
   foreach ($ip in $addresses) { Add-Route $ip }
   $resolved+=@([pscustomobject]@{Host=$name;Addresses=$addresses})
  }
  # Exact work names only. Never replace home DNS or the internet default route.
- $names=@($config.Hosts | Where-Object { $_ -match '[a-zA-Z]' })
+ $names=@($resolved | ForEach-Object Host | Where-Object { $_ -match '[a-zA-Z]' } | Select-Object -Unique)
  foreach ($rule in @(Get-DnsClientNrptRule)+@(Get-DnsClientNrptPolicy -Effective)) {
   if ($rule.PSObject.Properties['Comment'] -and $rule.Comment -eq $tag) { continue }
   foreach ($ns in @($rule.Namespace)) {
