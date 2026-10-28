@@ -1,0 +1,38 @@
+name: Windows Work
+on:
+  push:
+    branches: [main]
+    paths: ['windows/**', '.github/workflows/windows-work.yml']
+  pull_request:
+    paths: ['windows/**', '.github/workflows/windows-work.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Source privacy and safety checks
+        run: |
+          ./export-public.ps1 -Destination build/source-audit
+          python audit_public.py build/source-audit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B -m unittest test_windows_work test_public_audit
+      - name: Configuration and authentication model checks
+        run: dotnet run --project FortiSplit.Work.Checks -c Release
+      - name: Simulated network setup and recovery
+        shell: powershell
+        run: ./test_work_network.ps1
+      - name: Native Windows network schema
+        shell: powershell
+        run: ./test_work_platform.ps1
+      - name: Compile Windows application without connecting VPN
+        run: dotnet publish FortiSplit.Work/FortiSplit.Work.csproj -c Release -o build/FortiSplit-1.2.0

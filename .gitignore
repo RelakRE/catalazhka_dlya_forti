@@ -10,3 +10,17 @@ public-release/
 release-assets/
 windows/**/bin/
 windows/**/obj/
+
+# Private profiles and credentials (all platforms)
+*.local.json
+*.rdp
+*.log
+*.dmp
+*.pfx
+*.p12
+*.key
+.env
+.env.*
+sessions/
+profiles/
+settings.json

@@ -1,95 +1,57 @@
-# Forti Split — Windows Companion 0.1 Preview
+# Forti Split for Windows
 
-Нативный Windows-launcher для существующего FortiClient, RDP и TrueConf.
-**Эта версия не меняет маршруты и не устраняет потерю интернета при full-tunnel VPN.**
-Не является переносом проверенного macOS route guardian. Возможности намеренно
-ограничены тем, что реализовано без привилегированной Windows-службы.
+Desktop client for Fortinet SSL VPN using OpenConnect. Work services use host routes
+through the VPN; the normal internet connection keeps its default route.
 
-## Запуск
+The UI provides connect/disconnect, RDP and TrueConf launch, tray status, profile
+import/export and recovery. Login, password and second-factor forms appear in the app.
+Passwords are saved only when requested, in Windows Credential Manager. OTP values
+and session cookies are never saved in profiles or logs.
 
-Цель первого выпуска — Windows 11 x64. CI выполняется на Windows Server 2022;
-реальная пользовательская приёмка Windows 11/FortiClient остаётся неподтверждённой.
-Распакуйте весь ZIP в постоянную папку и запустите `FortiSplit.Companion.exe`.
-Не удаляйте лежащие рядом DLL и runtime. Python/.NET отдельно устанавливать
-не нужно: поставка self-contained. Администратор для launcher не требуется.
-Лицензии и сторонние уведомления поставки .NET находятся в папке `licenses`;
-сохраняйте её вместе с остальным пакетом.
-Приложение не подписано Authenticode; при корпоративном запрете/SmartScreen
-не отключайте защиту и не меняйте ExecutionPolicy — нужна разрешённая подписанная
-поставка. Согласуйте использование с правилами организации.
+## Build
 
-Первый запуск:
+Windows x64, .NET SDK 10 and Windows PowerShell 5.1 are required.
 
-1. Укажите отдельно установленный официальный FortiClient.exe.
-2. Выберите адаптер Fortinet и один контрольный рабочий IPv4/TCP-порт — например,
-   ваш рабочий стол и его порт. Поддерживаются только явно распознаваемые адаптеры
-   Fortinet/FortiClient. Не угадывайте публичный или домашний адрес: нужен рабочий
-   сервис, который по вашей схеме должен быть доступен через этот VPN.
-3. Выберите опции RDP/TrueConf (по умолчанию выключены). Если включили, укажите
-   доверенный локальный `.rdp`/`.exe`. Пароли остаются в родных клиентах.
-   Сворачивание FortiClient можно отключить. Запуск при входе — отдельная opt-in
-   опция; он открывает только интерфейс, никогда не подключает VPN автоматически.
+    dotnet restore FortiSplit.Work/FortiSplit.Work.csproj
+    dotnet publish FortiSplit.Work/FortiSplit.Work.csproj -c Release --no-restore -o build/FortiSplit-1.2.0
+    dotnet run --project FortiSplit.Work.Checks -c Release
+    powershell.exe -NoProfile -File test_work_network.ps1
+    python -m unittest test_windows_work
 
-Каждый день: «Начать работу» → вход/MFA в FortiClient → автоматическая проверка
-маршрута и TCP через выбранный адаптер → однократное открытие выбранных программ.
-Системный `mstsc.exe` получает `.rdp` отдельным аргументом, без cmd/PowerShell;
-предупреждения сертификата/издателя RDP не подавляются.
+Supply the unmodified OpenConnect 9.12 Windows runtime in the output's `client`
+directory: openconnect.exe, libopenconnect-5.dll and its dependent DLLs, wintun.dll,
+and the associated license files. Runtime binaries are excluded from this source tree.
+`prepare-work.ps1 -ClientDirectory <local-runtime-directory>` can copy a local runtime.
 
-Проверка читает GetBestInterface и NIC, но ничего не меняет. TCP-проверка одного
-заданного сервиса ограничена тайм-аутом; нет сканирования сети. При отмене или
-истечении ожидания запоздалый ответ не запустит программы. Если VPN/маршрут
-пропал после подтверждения, автоматический сценарий прекращается без переподключения.
+## Profiles
 
-Окно закрывается в трей; явный выход завершает Companion, но **не VPN и не RDP/звонки**.
-«Завершить работу» открывает FortiClient для ручного отключения. Сначала сохраните
-свою работу. Сворачивание через штатный ShowWindowAsync — best effort, без
-завершения процесса, имитации ввода и обхода управляемых ограничений клиента.
+`profile.example.json` contains documentation-only placeholders. Set your real VPN
+server, local RDP file and optional TrueConf settings in the app or import a private
+JSON profile. Existing profiles under `%LOCALAPPDATA%\Forti Split Work` are reused.
+Private profile exports end in `.local.json` and must stay outside Git.
 
-## Данные и границы
+For a fresh installation, open Settings, expand Advanced, set the VPN server and select
+the RDP file. Configure TrueConf if needed. Password/OTP are entered at connection time.
+Disconnect FortiClient before using this app. A UAC prompt starts the network worker.
+The UI and launched work apps retain ordinary user rights.
 
-Настройки: `%LOCALAPPDATA%\Forti Split Companion\settings.json`.
-Содержат пути/контрольный адрес, не пароль, OTP или содержимое RDP. Каталог
-ограничивается текущим SID и SYSTEM; запись атомарная. Нужные правила Windows
-ACL не заменяются POSIX-правами. UNC/URL, неизвестные поля, дубли JSON, ссылки
-и слишком большие файлы настроек отвергаются. API произвольных команд нет.
-Автозапуск — собственная запись в HKCU Run, только при явном сохранении опции.
-Никакой телеметрии/загрузки профилей/автообновления нет.
+## Verification limits
 
-Не поддержаны: split routing, split DNS/IPv6, per-app isolation, fail-closed,
-VPN auto-login, хранение токенов, перенос macOS root helper. При full-tunnel
-обычный интернет по-прежнему может отсутствовать. Ready означает проверенный
-путь к одному сервису, не подтверждённый вход в RDP или успешный звонок.
+Offline tests cover configuration, native ABI initialization, Credential Manager,
+private IPC and mocked network setup/recovery. They do not prove compatibility with
+every gateway or successful RDP login/video calls. A real login requires user credentials.
+Do not publish sessions, profiles, RDP files, dumps or screenshots containing work data.
 
-## Сборка и проверки
+Public export audit:
 
-На Windows с .NET SDK 10:
+    python audit_public.py .
 
-```powershell
-dotnet publish windows/FortiSplit.Companion/FortiSplit.Companion.csproj -c Release -r win-x64 --self-contained true -o build/windows-publish
-```
+See SECURITY.md, THIRD-PARTY.md and REVIEW.md. No remote publication is performed by build tools.
 
-GitHub Actions `windows-companion.yml` использует Windows runner, официальные
-actions закреплены commit SHA, permissions только contents:read. Встроенный
-`--self-test report.json screenshot.png` проверяет автомат/валидацию/хранилище
-и отрисовку WinForms; не подключает настоящий VPN, не открывает приложения и
-не регистрирует login item. SDK, runtime, исходный commit и результаты сохраняются
-в WINDOWS-VALIDATION.json. Успех CI не является реальной VPN-приёмкой.
+## Repository layout
 
-Архитектура: отдельный нативный адаптер в `windows/`, та же публичная Git-история,
-feature-ветка `codex/windows-companion`, отдельные версии Windows/Intel.
-Будущий route engine требует отдельной Windows-службы/ACL/журнала и реальных тестов;
-его нельзя получить механической заменой команд macOS.
-
-Первичные источники: [WinForms](https://learn.microsoft.com/dotnet/desktop/winforms/overview/),
-[self-contained .NET](https://learn.microsoft.com/dotnet/core/deploying/),
-[mstsc](https://learn.microsoft.com/windows-server/administration/windows-commands/mstsc),
-[GetBestInterface](https://learn.microsoft.com/windows/win32/api/iphlpapi/nf-iphlpapi-getbestinterface),
-[Run keys](https://learn.microsoft.com/windows/win32/setupapi/run-and-runonce-registry-keys).
-# Обновление 0.1.1
-
-Пропажа VPN/маршрута возвращает интерфейс к кнопке «Начать работу» с предложением
-повторного входа в FortiClient. Старое описание успешного подключения убрано.
-Ошибки краткие; «Журнал последней ошибки…» находится на вкладке настроек.
-Журнал хранится только в памяти текущего запуска. Пароли/MFA приложение не читает.
-Нет собственного запроса пароля администратора: эта версия работает asInvoker,
-а авторизацию FortiClient по-прежнему выполняет сам VPN-клиент.
+Run all commands above from the `windows/` directory. Current projects are
+`FortiSplit.Work/` and `FortiSplit.Work.Checks/`. OpenConnect runtime binaries
+are supplied separately; source CI does not connect a VPN.
+The older FortiClient-based client is documented in [COMPANION.md](COMPANION.md).
+Its previous review is [COMPANION-REVIEW.md](COMPANION-REVIEW.md).

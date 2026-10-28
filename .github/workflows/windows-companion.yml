@@ -2,7 +2,7 @@ name: Windows Companion
 on:
   push:
     branches: [main, codex/windows-companion, codex/disconnect-and-errors]
-    paths: ['windows/**', '.github/workflows/windows-companion.yml', 'profile_model.py', 'platform_contract.py', 'platform_adapters.py', 'setup_flow.py', 'desktop_entry.py', 'json_codec.py', 'test_portable_core.py']
+    paths: ['windows/FortiSplit.Companion/**', 'windows/COMPANION.md', '.github/workflows/windows-companion.yml', 'profile_model.py', 'platform_contract.py', 'platform_adapters.py', 'setup_flow.py', 'desktop_entry.py', 'json_codec.py', 'test_portable_core.py']
   workflow_dispatch:
 permissions:
   contents: read
@@ -36,7 +36,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path build/windows-assets
-          Copy-Item windows/README.md build/windows-publish/README.md
+          Copy-Item windows/COMPANION.md build/windows-publish/README.md
           $licenseDirectory = New-Item -ItemType Directory -Path build/windows-publish/licenses
           $sdkRoot = Split-Path (Get-Command dotnet).Source
           Get-ChildItem $sdkRoot -File | Where-Object { $_.Name -match '(?i)license|notice' } | Copy-Item -Destination $licenseDirectory

@@ -1,0 +1,14 @@
+{
+  "Server": "https://vpn.example.com:443",
+  "User": "",
+  "RememberPassword": false,
+  "Rdp": "",
+  "AutoRdp": true,
+  "TrueConf": "",
+  "TrueConfHost": "video.example.com",
+  "TrueConfFallback": "",
+  "TrueConfPort": 4307,
+  "AutoTrueConf": false,
+  "ConnectOnOpen": false,
+  "ExtraHosts": []
+}

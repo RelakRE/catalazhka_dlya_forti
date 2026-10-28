@@ -1,0 +1,11 @@
+var shell = WScript.CreateObject("WScript.Shell");
+var env = shell.Environment("Process");
+var reason = env("reason");
+if (reason !== "connect" && reason !== "reconnect" && reason !== "disconnect") WScript.Quit(0);
+var fs = WScript.CreateObject("Scripting.FileSystemObject");
+var root = fs.GetParentFolderName(WScript.ScriptFullName);
+var session = env("FORTISPLIT_SESSION");
+if (!session || session.indexOf('"') >= 0 || session.indexOf('\r') >= 0 || session.indexOf('\n') >= 0) WScript.Quit(2);
+var ps = fs.BuildPath(shell.ExpandEnvironmentStrings("%SystemRoot%"), "System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+var command = '"' + ps + '" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + fs.BuildPath(root,"Network.ps1") + '" -Mode Hook -Session "' + session + '"';
+WScript.Quit(shell.Run(command,0,true));

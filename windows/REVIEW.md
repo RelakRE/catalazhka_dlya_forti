@@ -1,42 +1,19 @@
-# Windows Companion 0.1 — внутреннее ревью
+# Review: version 1.2.0
 
-23 октября 2026. Self-review, не независимый аудит. Следуем SSDF PW.7/PW.8,
-проверяемым Windows API-контрактам и принципу минимальных прав. WinForms/.NET
-выбраны как нативный Windows-адаптер; macOS UI/guardian не эмулируются.
+- Username persistence roundtrip and UI form prefill are covered by tests.
+- Native authentication uses public OpenConnect callbacks, not prompt scraping.
+- A current-user named pipe verifies both peer PIDs and bounds messages to 64 KiB.
+- Server form labels are UI-only; callback progress and CLI output are not logged.
+- Password save eligibility requires a definite password field. OTP/challenge answers
+  are excluded, including password-typed fields with OTP labels/messages.
+- Credential writes occur only after authentication success. Disabling retention removes
+  the old scoped entry. Passwords/cookies never enter profile/session JSON or argv.
+- Private profiles contain real endpoints; compiled defaults are blank. Public fixtures
+  use example.com and RFC 5737 IPs. Private history/builds are excluded from the export.
+- UI, worker, watcher and owned-network cleanup retain their separate roles.
+- A hidden technical console is used only for graceful CLI cancellation. Authentication
+  itself is rendered by the app. A real gateway login remains a required integration test.
+- The native ABI, Windows vault, IPC and UI are tested offline. They do not establish
+  successful server authentication or a TrueConf call.
 
-| Риск | Решение / доказательство |
-| --- | --- |
-| Ложная готовность по факту запущенного FortiClient | Явно выбранный Fortinet NIC, состояние/IPv4, read-only GetBestInterface к контрольному адресу, TCP с дедлайном и повторная проверка маршрута после TCP. Никаких сетевых записей |
-| Запоздалый TCP callback после отмены/повторного запуска | Run ID, фазовый автомат, подтверждение только текущего waiting, один запуск на intent; таблица из 32 комбинаций eligibility и тесты once/cancel/foreign/timeout |
-| Изменение настроек в активном сценарии | Настройки disabled до отмены, snapshot на проверку, UI continuation на WinForms-потоке |
-| Shell/URL/UNC вместо клиента/RDP | Только локальные абсолютные .exe/.rdp, обычные файлы без reparse; UseShellExecute=false, отдельный ArgumentList для системного mstsc. Пароли/предупреждения сертификата не подавляются |
-| Небезопасное хранилище | Отдельный LocalAppData, protected DACL user SID + SYSTEM, bounded 64 KiB read, глубина JSON, отказ дублям/неизвестным полям, атомарный temp/replace |
-| Скрытая персистентность | Только собственная HKCU Run-запись при явном Save; --login не начинает intent, no admin/asInvoker. Ограничение команды 260 символов, путь с кавычками |
-| Применение чужой macOS-маршрутизации на Windows | MVP принципиально не содержит route mutation; ограничения на основном экране и в README. Для полного порта нужна отдельная служба/IPC/журнал/реальная приёмка |
-| Управление чужим процессом | Только best-effort сворачивание выбранного Forti exe в текущей Windows-сессии с проверкой пути; никакого kill, ввода пароля или закрытия RDP/TrueConf |
-| Сломанный мастер / потеря настроек | Ревью исправило очистку ошибки сохранения и возврат общих controls на вкладку настроек; отдельная регрессия проходит три шага без реальных действий |
-| Ошибки nullable / несовместимость платформы | TreatWarningsAsErrors; первая Windows CI обнаружила nullable lookup адаптера, исправлено pattern matching вместо небезопасного cast |
-| Длинный путь или запрет чтения Run-key блокировали весь UI | Ограничение 260 проверяется только при включении login; отказ чтения registry/NIC показан без падения. Клиенты запускаются со своим рабочим каталогом |
-| Ошибочные доказательства | Только Windows CI с записью commit/SDK/runtime; реальные VPN/MFA, login item, RDP/звонок, DPI и SmartScreen остаются pending. ZIP/отчёт имеют SHA-256, это не Authenticode |
-| Переносимость checksums | Локальная проверка на Mac выявила CRLF в Windows SHA256SUMS; pipeline пишет UTF-8/LF, чтобы shasum не воспринимал CR как часть имени |
-| Лицензии self-contained runtime | Проверка первого ZIP обнаружила, что dotnet publish сам не перенёс уведомления. Pipeline добавляет LICENSE/NOTICE из поставки SDK/runtime packs, требует их наличие и записывает список в evidence |
-
-Не выполнялись: реальный VPN, принудительное изменение маршрутов, запись
-пользовательского Run-key в тестах, проверки чужих серверов или отправка секретов.
-Self-test использует собственную временную папку, синтетические адреса и fake exe,
-который никогда не запускается. UI отрисовывается WinForms на Windows runner.
-
-Остающиеся риски: нет split routing/fail-closed; процесс того же SID может менять
-свои настройки; ACL не является защитой от владельца/администратора. Имена/драйверы
-Fortinet различаются, поэтому неизвестный адаптер не угадывается. Содержимое
-доверенного RDP обрабатывает сам mstsc; пользователь должен доверять источнику
-файла. Нужен Authenticode для нормального распространения и реальная приёмка
-на Windows 11 со своей разрешённой инфраструктурой.
-# Дополнение к ревью 0.1.1
-
-При потере подтверждённого маршрута сбрасываются run intent и Ready, очищается
-устаревшее описание успешного подключения. Новое действие запускается только
-пользователем. Большие исключения вынесены в ограниченный журнал в памяти,
-открываемый из настроек; краткое сообщение не содержит сырого текста исключения.
-Нативный self-test проверяет эти регрессии. Проверка настоящего FortiClient
-и разрыва VPN на рабочей Windows остаётся отдельной ручной приёмкой.
+No remote repository was created or published. A second independent reviewer was not used.

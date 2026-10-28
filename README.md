@@ -1,17 +1,33 @@
-# Forti Split — Intel Mac и Windows Companion
+# Forti Split — macOS и Windows
 
-Небольшое macOS-приложение для одновременной работы FortiClient VPN и обычного
-интернета. Рабочие IPv4-адреса остаются в VPN, остальной IPv4-трафик направляется
-через физический сетевой шлюз. Это разделение **по адресам, не по приложениям**.
+Клиенты для работы с корпоративным VPN и обычным интернетом.
+Выберите свою платформу: реализации и форматы приватных профилей различаются.
 
-Для Windows есть отдельный ограниченный
-[Companion 0.1.1 Preview](https://github.com/RelakRE/catalazhka_dlya_forti/releases/tag/windows-v0.1.1):
-FortiClient/MFA → проверка рабочего пути → RDP/TrueConf, настройки и трей.
-**Он не меняет маршруты и не устраняет потерю интернета при full-tunnel VPN.**
-[Инструкция и границы Windows](windows/README.md), [Windows review](windows/REVIEW.md).
-Далее на этой странице описана Intel-версия.
+| Платформа | Текущая версия | Инструкция |
+| --- | --- | --- |
+| Windows x64 | 1.2.0, исходники; требуется проверка реального входа через новую GUI-форму | [Windows](windows/README.md) |
+| macOS Intel | 1.4.1 Intel Preview | [Скачать](https://github.com/RelakRE/catalazhka_dlya_forti/releases/tag/v1.4.1), инструкция ниже |
 
-## Скачать и запустить
+Windows 1.2.0 использует OpenConnect: вход, пароль и 2FA вводятся в интерфейсе,
+рабочие адреса получают отдельные маршруты и DNS-правила. Есть запуск RDP/TrueConf,
+трей и сохранение пароля по выбору пользователя в Windows Credential Manager.
+Бинарный выпуск 1.2.0 здесь пока не опубликован; сборка описана в Windows-инструкции.
+Старый [Windows Companion 0.1.1](windows/COMPANION.md) сохранён как предыдущий
+экспериментальный клиент и не является текущей Windows-версией.
+
+## Структура проекта
+
+- `windows/` — Windows-клиент, настройки-пример, сборка и автономные тесты.
+- Файлы Swift/Python и инструкции в корне — существующая macOS-версия.
+  Их расположение сохранено для совместимости со сборкой и выпущенными инструкциями.
+- `.github/workflows/` — автоматические проверки.
+
+Реальные адреса, логины, RDP-файлы, приватные профили и журналы не публикуйте.
+Пример Windows-профиля: [profile.example.json](windows/profile.example.json).
+Версии платформ выпускаются независимо: новые теги `windows-v…` и `macos-v…`;
+существующие macOS-теги `v…` остаются действующими.
+
+## macOS Intel: скачать и запустить
 
 [Скачать Forti Split 1.4.1 — Intel Preview](https://github.com/RelakRE/catalazhka_dlya_forti/releases/tag/v1.4.1).
 Выберите `Forti-Split-1.4.1-Intel.zip`, а не архив исходников GitHub.
