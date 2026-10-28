@@ -68,6 +68,10 @@ try {
  if ((Get-Item -LiteralPath $configPath).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Config link refused' }
  $config=Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
  $optionalHosts=@(); if ($config.PSObject.Properties['OptionalHosts']) { $optionalHosts=@($config.OptionalHosts) }
+ $domains=@();if($config.PSObject.Properties['DnsDomains']){$domains=@($config.DnsDomains)}
+ if($domains.Count -gt 8){throw 'DNS domain count bound'}
+ foreach($domain in $domains){Assert-Host $domain;$parsed=$null;if([Net.IPAddress]::TryParse($domain,[ref]$parsed)){throw 'DNS domain must not be an IP'}}
+ $domainNamespaces=@($domains|ForEach-Object {'.'+$_})
  if (@($config.Hosts).Count + $optionalHosts.Count -gt 40) { throw 'Host count bound' }
  foreach ($name in @($config.Hosts)+$optionalHosts) { Assert-Host $name }
  if ($Mode -eq 'Hook') {
@@ -87,6 +91,11 @@ try {
   }
   if ($env:INTERNAL_IP4_MTU -match '^\d+$') { $mtu=[int]$env:INTERNAL_IP4_MTU; if ($mtu -ge 576 -and $mtu -le 9000) { Set-NetIPInterface -InterfaceIndex $index -AddressFamily IPv4 -NlMtuBytes $mtu -PolicyStore ActiveStore } }
   foreach ($ip in $dns) { Add-Route $ip }
+  # Bootstrap IPs and private-domain DNS must be ready before the first lookup.
+  # OpenConnect's synchronous hook must not wait for a query through this tunnel.
+  foreach($name in @($config.Hosts)){$literal=$null;if([Net.IPAddress]::TryParse($name,[ref]$literal)){Add-Route $name}}
+  if($domainNamespaces.Count){Add-DnsClientNrptRule -Namespace $domainNamespaces -NameServers $dns -Comment $tag -DisplayName 'Forti Split Work' | Out-Null}
+  Clear-DnsClientCache -ErrorAction SilentlyContinue
   $script:state.Stage='base_ready'; Save-State
   return
  }
@@ -119,10 +128,11 @@ try {
   foreach ($ip in $addresses) { Add-Route $ip }
   $resolved+=@([pscustomobject]@{Host=$name;Addresses=$addresses})
  }
- # Exact work names only. Never replace home DNS or the internet default route.
- $names=@($resolved | ForEach-Object Host | Where-Object { $_ -match '[a-zA-Z]' } | Select-Object -Unique)
+ # Configured private domains and work names only; never global DNS/default routes.
+ $names=@(@($domainNamespaces)+@($resolved | ForEach-Object Host | Where-Object { $_ -match '[a-zA-Z]' }) | Select-Object -Unique)
  foreach ($rule in @(Get-DnsClientNrptRule | Where-Object Comment -eq $tag)) { Remove-DnsClientNrptRule -Name $rule.Name -Force }
  if ($names.Count) { Add-DnsClientNrptRule -Namespace $names -NameServers $script:state.Dns -Comment $tag -DisplayName 'Forti Split Work' | Out-Null }
+ Clear-DnsClientCache -ErrorAction SilentlyContinue
  $script:state | Add-Member -NotePropertyName Unresolved -NotePropertyValue $unresolved -Force
  $script:state.Resolved=$resolved; $script:state.Stage='ready'; Save-State
 } catch {

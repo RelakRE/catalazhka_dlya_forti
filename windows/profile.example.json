@@ -10,5 +10,6 @@
   "TrueConfPort": 4307,
   "AutoTrueConf": false,
   "ConnectOnOpen": false,
-  "ExtraHosts": []
+  "ExtraHosts": [],
+  "DnsDomains": []
 }

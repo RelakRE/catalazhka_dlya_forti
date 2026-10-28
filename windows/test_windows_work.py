@@ -40,7 +40,8 @@ class WorkSafety(unittest.TestCase):
         code = (SRC / 'Network.ps1').read_text(encoding='utf-8-sig')
         hook = code.split("if ($Mode -eq 'Hook') {", 1)[1].split('$script:state=Read-State', 1)[0]
         self.assertNotIn('Resolve-DnsName', hook)
-        self.assertNotIn('Add-DnsClientNrptRule', hook)
+        self.assertIn('Add-DnsClientNrptRule', hook)
+        self.assertLess(hook.index('foreach($name in @($config.Hosts))'), hook.index("Stage='base_ready'"))
 
     def test_applications_started_only_after_ready(self):
         code = (SRC / 'MainForm.cs').read_text(encoding='utf-8')

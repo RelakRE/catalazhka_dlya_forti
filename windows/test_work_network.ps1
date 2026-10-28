@@ -7,6 +7,8 @@ $session=Join-Path $testRoot ('Forti Split Work\sessions\'+[guid]::NewGuid().ToS
 New-Item -ItemType Directory -Path $session -Force | Out-Null
 $global:fortiTestroutes=@();$global:fortiTestrules=@();$global:fortiTestips=@();$global:fortiTestfailResolve=$false;$global:fortiTestfailRemove=$false;$global:fortiTestMissingNames=@()
 $global:fortiTestadapter=[pscustomobject]@{ifIndex=77;InterfaceIndex=77;InterfaceGuid='test-guid';Name='FortiSplitWork';Status='Up';InterfaceDescription='Wintun'}
+$global:fortiTestDnsCalls=0;$global:fortiTestCacheClears=0
+function global:Clear-DnsClientCache { [CmdletBinding()]param();$global:fortiTestCacheClears++ }
 function global:Get-NetAdapter { param($InterfaceIndex,[switch]$IncludeHidden); $global:fortiTestadapter }
 function global:Get-NetIPInterface { param($InterfaceIndex,$AddressFamily); [pscustomobject]@{NlMtu=1500} }
 function global:Set-NetIPInterface { param($InterfaceIndex,$AddressFamily,$NlMtuBytes,$PolicyStore) }
@@ -20,7 +22,7 @@ function global:Get-DnsClientNrptRule { $global:fortiTestrules }
 function global:Get-DnsClientNrptPolicy { param([switch]$Effective);throw 'Runtime effective-policy diagnostics must not run' }
 function global:Add-DnsClientNrptRule { param($Namespace,$NameServers,$Comment,$DisplayName);$global:fortiTestrules+=@([pscustomobject]@{Name=[guid]::NewGuid().ToString();Namespace=$Namespace;Comment=$Comment}) }
 function global:Remove-DnsClientNrptRule { param($Name,[switch]$Force);$global:fortiTestrules=@($global:fortiTestrules|Where-Object Name -ne $Name) }
-function global:Resolve-DnsName { [CmdletBinding()]param($Name,$Server,$Type,[switch]$DnsOnly,[switch]$QuickTimeout,[switch]$TcpOnly);if($global:fortiTestfailResolve -or $global:fortiTestMissingNames -contains $Name){throw 'fake DNS failure'};[pscustomobject]@{IPAddress='198.51.100.80'} }
+function global:Resolve-DnsName { [CmdletBinding()]param($Name,$Server,$Type,[switch]$DnsOnly,[switch]$QuickTimeout,[switch]$TcpOnly);$global:fortiTestDnsCalls++;if($global:fortiTestfailResolve -or $global:fortiTestMissingNames -contains $Name){throw 'fake DNS failure'};[pscustomobject]@{IPAddress='198.51.100.80'} }
 function Assert($condition,$message){if(-not $condition){throw $message}}
 try {
  @{Hosts=@('desktop.example.com','gateway.example.com','video.example.com')}|ConvertTo-Json|Set-Content (Join-Path $session 'config.json')
@@ -89,6 +91,24 @@ try {
  Assert ($s.Stage -eq 'ready' -and $s.Unresolved -contains 'desktop.example.com') 'Direct target name blocked VPN'
  & $network -Session $session -Mode Cleanup
  $global:fortiTestMissingNames=@()
+ # WorkVPN-style bootstrap must work before the first DNS response, for any PC.
+ @{Hosts=@('203.0.113.21','203.0.113.22','203.0.113.23');OptionalHosts=@('different-pc.corp.example.com','gateway.rdp.example.com');DnsDomains=@('corp.example.com','rdp.example.com')}|ConvertTo-Json|Set-Content (Join-Path $session 'config.json')
+ $global:fortiTestfailResolve=$true
+ $before=$global:fortiTestDnsCalls
+ & $network -Session $session -Mode Hook
+ Assert ($global:fortiTestDnsCalls -eq $before) 'Connect hook waited for DNS through its own tunnel'
+ Assert ($global:fortiTestroutes.Count -eq 5) 'Bootstrap gateway IP routes missing before DNS'
+ Assert (@($global:fortiTestrules|Where-Object {$_.Namespace -contains '.corp.example.com' -and $_.Namespace -contains '.rdp.example.com'}).Count -eq 1) 'Private domain DNS policy missing before lookup'
+ Assert ($global:fortiTestCacheClears -gt 0) 'Negative DNS cache was not cleared'
+ & $network -Session $session -Mode Resolve
+ $s=Get-Content (Join-Path $session 'network.json') -Raw|ConvertFrom-Json
+ Assert ($s.Stage -eq 'ready' -and $s.Unresolved.Count -eq 2) 'Unknown PC blocked bootstrap configuration'
+ Assert ($global:fortiTestroutes.Count -eq 5) 'DNS failure lost bootstrap gateway routes'
+ Assert (@($global:fortiTestrules|Where-Object {$_.Namespace -contains '.corp.example.com'}).Count -eq 1) 'DNS failure lost private-domain policy'
+ & $network -Session $session -Mode Cleanup
+ Assert ($global:fortiTestroutes.Count -eq 0) 'Bootstrap routes not cleaned'
+ Assert ($global:fortiTestrules.Count -eq 1 -and $global:fortiTestrules[0].Name -eq 'foreign') 'Bootstrap cleanup touched foreign DNS'
+ $global:fortiTestfailResolve=$false
  Write-Output 'NETWORK_CHECKS_PASSED: hook, deferred DNS, route deduplication, no default route, ownership, cleanup, idempotence'
 } finally { $env:LOCALAPPDATA=$originalLocalAppData }
 # Expected failure cases above set LASTEXITCODE. Reaching here means every assertion passed.

@@ -35,4 +35,4 @@ jobs:
         shell: powershell
         run: ./test_work_platform.ps1
       - name: Compile Windows application without connecting VPN
-        run: dotnet publish FortiSplit.Work/FortiSplit.Work.csproj -c Release -o build/FortiSplit-1.2.3
+        run: dotnet publish FortiSplit.Work/FortiSplit.Work.csproj -c Release -o build/FortiSplit-1.2.4

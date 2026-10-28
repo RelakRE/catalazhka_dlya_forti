@@ -31,6 +31,13 @@ try {
  Check("manual_trueconf_keeps_vpn_route_hints",manualTc.OptionalHosts.Contains(manualTc.TrueConfHost)&&manualTc.OptionalHosts.Contains(manualTc.TrueConfFallback));
 } finally {File.Delete(fakeExe);}
 var loginProfile=new Config{User="sample.user",RememberPassword=true};
+var bootstrap=new Config{Server="https://vpn.example.com",AutoRdp=false,DnsDomains=["corp.example.com","rdp.example.com"],ExtraHosts=["203.0.113.21","203.0.113.22"]};
+bootstrap.PrepareRdp("full address:s:any-computer.corp.example.com\ngatewayhostname:s:gateway.rdp.example.com\ngatewayusagemethod:i:2");
+Check("bootstrap_ips_not_dependent_on_pc_name",bootstrap.Hosts.SequenceEqual(bootstrap.ExtraHosts)&&bootstrap.OptionalHosts.Contains("any-computer.corp.example.com"));
+var bootstrapRestored=JsonSerializer.Deserialize<Config>(JsonSerializer.Serialize(bootstrap))!;
+Check("private_domains_survive_profile_roundtrip",bootstrapRestored.DnsDomains.SequenceEqual(bootstrap.DnsDomains));
+Reject("catch_all_dns_domain_rejected",()=>new Config{Server="https://vpn.example.com",AutoRdp=false,DnsDomains=["."]}.Validate());
+Reject("ip_as_dns_domain_rejected",()=>new Config{Server="https://vpn.example.com",AutoRdp=false,DnsDomains=["203.0.113.21"]}.Validate());
 var restoredProfile=JsonSerializer.Deserialize<Config>(JsonSerializer.Serialize(loginProfile))!;
 Check("login_saved_and_reloaded",restoredProfile.User==loginProfile.User&&restoredProfile.RememberPassword);
 var passwordField=new AuthField("password","Password",2,[]);

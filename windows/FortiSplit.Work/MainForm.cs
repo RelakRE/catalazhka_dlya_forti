@@ -11,7 +11,7 @@ internal sealed partial class MainForm : Form
  private readonly Label detail = new() { Text="FortiClient должен быть отключён. Нажмите «Подключить» — клиент VPN откроется автоматически.",AutoSize=true,MaximumSize=new Size(740,0) };
  private readonly Label duration = new() { Text="VPN отключён",AutoSize=true,ForeColor=Color.Teal };
  private readonly Button connect=Btn("Подключить"), disconnect=Btn("Отключить"), rdpButton=Btn("Открыть RDP"), tcButton=Btn("Открыть TrueConf"), restore=Btn("Восстановить сеть"), logs=Btn("Открыть журнал");
- private readonly TextBox server=Box(), user=Box(), rdp=Box(), tc=Box(), tcHost=Box(), extra=Box();
+ private readonly TextBox server=Box(), user=Box(), rdp=Box(), tc=Box(), tcHost=Box(), extra=Box(), dnsDomains=Box();
  private readonly CheckBox autoRdp=Check("Открывать RDP после подключения"), autoTc=Check("Открывать TrueConf после подключения"), autoConnect=Check("Подключаться при открытии приложения");
  private readonly NumericUpDown tcPort=new(){Minimum=1,Maximum=65535,Value=4307,Width=120};
  private readonly System.Windows.Forms.Timer poll=new(){Interval=500};
@@ -26,7 +26,7 @@ internal sealed partial class MainForm : Form
  private static FlowLayoutPanel Column()=>new(){Dock=DockStyle.Fill,AutoScroll=true,FlowDirection=FlowDirection.TopDown,WrapContents=false,Padding=new Padding(24)};
  internal MainForm(bool preview)
  {
-  this.preview=preview; Text="Forti Split · 1.2.3"; ClientSize=new Size(820,690); MinimumSize=new Size(820,700); Font=new Font("Segoe UI",11); BackColor=Color.FromArgb(245,248,250);
+  this.preview=preview; Text="Forti Split · 1.2.4"; ClientSize=new Size(820,690); MinimumSize=new Size(820,700); Font=new Font("Segoe UI",11); BackColor=Color.FromArgb(245,248,250);
   var work=new TabPage("Работа"); var settings=new TabPage("Настройки"); tabs.TabPages.AddRange([work,settings]); Controls.Add(tabs);
   var main=Column();work.Controls.Add(main);
   main.Controls.AddRange([Label("FORTI SPLIT  /  OPENCONNECT"),state,detail,duration]);
@@ -49,7 +49,7 @@ internal sealed partial class MainForm : Form
   void Field(string title,Control control){advanced.Controls.Add(Label(title));advanced.Controls.Add(control);options.Add(control);}
   Field("Сервер VPN",server);Field("Программа TrueConf",tc);
   var chooseTc=Btn("Выбрать TrueConf…");advanced.Controls.Add(chooseTc);options.Add(chooseTc);chooseTc.Click+=(_,_)=>Choose(tc,"Программа (*.exe)|*.exe");
-  Field("Сервер TrueConf",tcHost);Field("Порт TrueConf",tcPort);Field("Другие рабочие имена / IPv4",extra);
+  Field("Сервер TrueConf",tcHost);Field("Порт TrueConf",tcPort);Field("Другие рабочие имена / IPv4",extra);Field("Рабочие DNS-домены",dnsDomains);
   var save=Btn("Сохранить");config.Controls.Add(save);options.Add(save);save.Click+=(_,_)=>Try(()=>{Save();detail.Text="Настройки сохранены.";});
   var profiles=new FlowLayoutPanel{Width=690,Height=58};var import=Btn("Импорт профиля…");var export=Btn("Экспорт профиля…");profiles.Controls.AddRange([import,export]);config.Controls.Add(profiles);options.Add(import);options.Add(export);
   import.Click+=(_,_)=>Try(()=>{using var dialog=new OpenFileDialog{Filter="Профиль (*.json)|*.json"};if(dialog.ShowDialog()==DialogResult.OK)Apply(Storage.Read<Config>(dialog.FileName));});
@@ -75,8 +75,8 @@ internal sealed partial class MainForm : Form
  }
  private void Try(Action action){try{action();}catch(Exception e){detail.Text=e.Message;MessageBox.Show(e.Message,"Forti Split");}}
  private void Choose(TextBox field,string filter){using var dialog=new OpenFileDialog{Filter=filter,CheckFileExists=true};if(dialog.ShowDialog()==DialogResult.OK)field.Text=dialog.FileName;}
- private void Apply(Config c){profile=c;server.Text=c.Server;user.Text=c.User;rdp.Text=c.Rdp;tc.Text=c.TrueConf;tcHost.Text=c.TrueConfHost;tcPort.Value=c.TrueConfPort;autoRdp.Checked=c.AutoRdp;autoTc.Checked=c.AutoTrueConf;autoConnect.Checked=c.ConnectOnOpen;rememberPassword.Checked=c.RememberPassword;extra.Text=string.Join(", ",c.ExtraHosts);}
- private Config Save(){var c=new Config{Server=server.Text.Trim(),User=user.Text.Trim(),RememberPassword=rememberPassword.Checked,Rdp=rdp.Text.Trim(),TrueConf=tc.Text.Trim(),TrueConfHost=tcHost.Text.Trim(),TrueConfFallback=tcHost.Text.Trim().Equals(profile.TrueConfHost,StringComparison.OrdinalIgnoreCase)?profile.TrueConfFallback:"",TrueConfPort=(int)tcPort.Value,AutoRdp=autoRdp.Checked,AutoTrueConf=autoTc.Checked,ConnectOnOpen=autoConnect.Checked,ExtraHosts=extra.Text.Split([',',';','\n'],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)};c.Validate();c.PrepareRdp(c.Rdp.Length>0?File.ReadAllText(c.Rdp):"");SaveProfile(c);return c;}
+ private void Apply(Config c){profile=c;server.Text=c.Server;user.Text=c.User;rdp.Text=c.Rdp;tc.Text=c.TrueConf;tcHost.Text=c.TrueConfHost;tcPort.Value=c.TrueConfPort;autoRdp.Checked=c.AutoRdp;autoTc.Checked=c.AutoTrueConf;autoConnect.Checked=c.ConnectOnOpen;rememberPassword.Checked=c.RememberPassword;extra.Text=string.Join(", ",c.ExtraHosts);dnsDomains.Text=string.Join(", ",c.DnsDomains);}
+ private Config Save(){var c=new Config{Server=server.Text.Trim(),User=user.Text.Trim(),RememberPassword=rememberPassword.Checked,Rdp=rdp.Text.Trim(),TrueConf=tc.Text.Trim(),TrueConfHost=tcHost.Text.Trim(),TrueConfFallback=tcHost.Text.Trim().Equals(profile.TrueConfHost,StringComparison.OrdinalIgnoreCase)?profile.TrueConfFallback:"",TrueConfPort=(int)tcPort.Value,AutoRdp=autoRdp.Checked,AutoTrueConf=autoTc.Checked,ConnectOnOpen=autoConnect.Checked,DnsDomains=dnsDomains.Text.Split([',', ';' ],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries),ExtraHosts=extra.Text.Split([',',';','\n'],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)};c.Validate();c.PrepareRdp(c.Rdp.Length>0?File.ReadAllText(c.Rdp):"");SaveProfile(c);return c;}
  private void Start()
  {
   if(preview || worker is not null && !worker.HasExited)return;
@@ -124,6 +124,6 @@ internal sealed partial class MainForm : Form
   worker?.Dispose();worker=Process.Start(info);status=new("disconnecting","Восстанавливаем предыдущий сеанс…");launched=true;RefreshUi();
  }
  private void OpenLog(){string path=folder??Storage.Root;var info=new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),"explorer.exe")){UseShellExecute=true};info.ArgumentList.Add(path);Process.Start(info)?.Dispose();}
- private void RefreshUi(){bool active=worker is not null&&!worker.HasExited;state.Text=status.Stage switch{"connected"=>"Вы подключены","authenticating"=>"Ожидаем входа","configuring"=>"Готовим рабочую сеть","reconnecting"=>"Восстанавливаем соединение","disconnecting"=>"Завершаем работу","error" or "recovery_required"=>"Нужно внимание","preparing"=>"Подключаемся…",_=>"VPN отключён"};detail.Text=status.Message;connect.Enabled=!active;disconnect.Enabled=active&&!stopRequested;restore.Enabled=!active;rdpButton.Enabled=tcButton.Enabled=!stopRequested&&LaunchGate.CanLaunch(status,active);foreach(var option in options)option.Enabled=!active;duration.Text=connectedAt.HasValue&&active?"Время работы: "+(DateTime.UtcNow-connectedAt.Value).ToString(@"hh\:mm\:ss"):"Без ограничения длительности сеанса";if(tray is not null)tray.Text="Forti Split — "+(status.Ready?"подключён":"ожидание");}
+ private void RefreshUi(){bool active=worker is not null&&!worker.HasExited;state.Text=status.Stage switch{"connected"=>"VPN-сеанс активен","authenticating"=>"Ожидаем входа","configuring"=>"Готовим рабочую сеть","reconnecting"=>"Восстанавливаем соединение","disconnecting"=>"Завершаем работу","error" or "recovery_required"=>"Нужно внимание","preparing"=>"Подключаемся…",_=>"VPN отключён"};detail.Text=status.Message;connect.Enabled=!active;disconnect.Enabled=active&&!stopRequested;restore.Enabled=!active;rdpButton.Enabled=tcButton.Enabled=!stopRequested&&LaunchGate.CanLaunch(status,active);foreach(var option in options)option.Enabled=!active;duration.Text=connectedAt.HasValue&&active?"Время работы: "+(DateTime.UtcNow-connectedAt.Value).ToString(@"hh\:mm\:ss"):"Без ограничения длительности сеанса";if(tray is not null)tray.Text="Forti Split — "+(status.Ready?"подключён":"ожидание");}
  private void ShowWindow(){Show();WindowState=FormWindowState.Normal;Activate();}
 }

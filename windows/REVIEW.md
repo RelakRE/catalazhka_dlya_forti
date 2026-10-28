@@ -1,4 +1,11 @@
-# Review: version 1.2.3
+# Review: version 1.2.4
+
+- Configured bootstrap IPv4 routes and private-domain NRPT are applied in the connect
+  hook before the first lookup; no DNS query runs in the synchronous hook. Resolve
+  retains those policies even when every work-name query fails. The DNS cache is
+  cleared once per setup. Profile domain/IP data is private and never built in.
+- A mocked regression verifies three gateway IP routes and two private-domain rules
+  before any DNS call, with all work-name queries failing, plus owned-only recovery.
 
 - Neither target nor gateway DNS/TCP checks gate the VPN. RDP is passed to mstsc
   unchanged; parsable endpoints provide best-effort route hints, without rejecting

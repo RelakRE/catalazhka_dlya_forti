@@ -18,6 +18,7 @@ public sealed record Config
  public bool AutoTrueConf { get; set; } = false;
  public bool ConnectOnOpen { get; set; }
  public string[] ExtraHosts { get; set; } = [];
+ public string[] DnsDomains { get; set; } = [];
  public string[] Hosts { get; set; } = [];
  public string[] OptionalHosts { get; set; } = [];
  public void Validate()
@@ -31,6 +32,8 @@ public sealed record Config
   if (TrueConfPort is < 1 or > 65535) throw new ArgumentException("Неверный порт.");
   if (ExtraHosts.Length > 32 || Hosts.Length + OptionalHosts.Length > 40) throw new ArgumentException("Слишком много рабочих адресов.");
   foreach (string host in ExtraHosts.Concat(Hosts).Concat(OptionalHosts)) Host(host);
+  if(DnsDomains.Length>8)throw new ArgumentException("Слишком много рабочих DNS-доменов.");
+  foreach(string domain in DnsDomains){Host(domain);if(IPAddress.TryParse(domain,out _))throw new ArgumentException("Нужен DNS-домен, не IP-адрес.");}
  }
  public static void LocalFile(string path, string extension)
  {

@@ -10,7 +10,7 @@ and session cookies are never saved in profiles or logs.
 
 ## Download and first launch
 
-Download the Windows preview from [Releases](https://github.com/RelakRE/catalazhka_dlya_forti/releases/tag/windows-v1.2.3).
+Download the Windows preview from [Releases](https://github.com/RelakRE/catalazhka_dlya_forti/releases/tag/windows-v1.2.4).
 Extract the complete archive and run `Forti Split.exe`. .NET is included.
 The first launch downloads and prepares upstream OpenConnect 9.21 and Wintun 0.14.1
 in a progress window, without a console. Internet and a writable app folder are
@@ -22,7 +22,7 @@ Existing complete runtimes are reused. See [release notes](RELEASE-NOTES.md).
 Windows x64, .NET SDK 10 and Windows PowerShell 5.1 are required.
 
     dotnet restore FortiSplit.Work/FortiSplit.Work.csproj
-    dotnet publish FortiSplit.Work/FortiSplit.Work.csproj -c Release --no-restore -o build/FortiSplit-1.2.3
+    dotnet publish FortiSplit.Work/FortiSplit.Work.csproj -c Release --no-restore -o build/FortiSplit-1.2.4
     dotnet run --project FortiSplit.Work.Checks -c Release
     powershell.exe -NoProfile -File test_work_network.ps1
     python -m unittest test_windows_work
@@ -41,6 +41,15 @@ Run `./build-release.ps1` in a clean checkout to create and validate release ass
 server, local RDP file and optional TrueConf settings in the app or import a private
 JSON profile. Existing profiles under `%LOCALAPPDATA%\Forti Split Work` are reused.
 Private profile exports end in `.local.json` and must stay outside Git.
+
+The private network profile should include known gateway IPv4 addresses in
+`ExtraHosts` and private DNS suffixes (without a leading dot) in `DnsDomains`.
+Those IP routes and domain DNS policies are installed before any tunnel DNS query,
+and the DNS cache is cleared once. This follows the WorkVPN bootstrap approach:
+the first failed DNS lookup cannot prevent the gateway routes or domain policy
+from being installed. No per-PC allowlist is required for RDP through that gateway.
+Use the network administrator's actual values; public examples remain blank.
+Import the updated private profile, then set your own username and local RDP file.
 
 The app does not approve or reject RDP destination names or pre-test RDP ports.
 Any selected local RDP file is passed unchanged to mstsc, including short computer
