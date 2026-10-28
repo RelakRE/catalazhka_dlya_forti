@@ -8,7 +8,16 @@ import/export and recovery. Login, password and second-factor forms appear in th
 Passwords are saved only when requested, in Windows Credential Manager. OTP values
 and session cookies are never saved in profiles or logs.
 
-## Build
+## Download and first launch
+
+Download the Windows preview from [Releases](https://github.com/RelakRE/catalazhka_dlya_forti/releases/tag/windows-v1.2.0).
+Extract the complete archive and run `Forti Split.exe`. .NET is included.
+The first launch downloads and prepares upstream OpenConnect 9.21 and Wintun 0.14.1
+in a progress window, without a console. Internet and a writable app folder are
+required. Executable downloads are checked against pinned SHA256 values before use.
+Existing complete runtimes are reused. See [release notes](RELEASE-NOTES.md).
+
+## Build from source
 
 Windows x64, .NET SDK 10 and Windows PowerShell 5.1 are required.
 
@@ -18,10 +27,13 @@ Windows x64, .NET SDK 10 and Windows PowerShell 5.1 are required.
     powershell.exe -NoProfile -File test_work_network.ps1
     python -m unittest test_windows_work
 
-Supply the unmodified OpenConnect 9.12 Windows runtime in the output's `client`
-directory: openconnect.exe, libopenconnect-5.dll and its dependent DLLs, wintun.dll,
-and the associated license files. Runtime binaries are excluded from this source tree.
-`prepare-work.ps1 -ClientDirectory <local-runtime-directory>` can copy a local runtime.
+Runtime binaries are excluded from this source tree and the release archive.
+The first launch prepares them from upstream automatically; `--prepare-runtime`
+performs only that preparation for automation, without connecting VPN.
+`prepare-work.ps1 -ClientDirectory <local-runtime-directory>` can alternatively
+copy an existing compatible local runtime. The native API binding supports the
+OpenConnect 9.12 public ABI and is checked offline with 9.21 for this release.
+Run `./build-release.ps1` in a clean checkout to create and validate release assets.
 
 ## Profiles
 

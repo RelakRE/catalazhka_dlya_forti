@@ -5,13 +5,15 @@
 
 | Платформа | Текущая версия | Инструкция |
 | --- | --- | --- |
-| Windows x64 | 1.2.0, исходники; требуется проверка реального входа через новую GUI-форму | [Windows](windows/README.md) |
+| Windows x64 | 1.2.0 Preview | [Скачать](https://github.com/RelakRE/catalazhka_dlya_forti/releases/tag/windows-v1.2.0), [инструкция](windows/README.md) |
 | macOS Intel | 1.4.1 Intel Preview | [Скачать](https://github.com/RelakRE/catalazhka_dlya_forti/releases/tag/v1.4.1), инструкция ниже |
 
 Windows 1.2.0 использует OpenConnect: вход, пароль и 2FA вводятся в интерфейсе,
 рабочие адреса получают отдельные маршруты и DNS-правила. Есть запуск RDP/TrueConf,
 трей и сохранение пароля по выбору пользователя в Windows Credential Manager.
-Бинарный выпуск 1.2.0 здесь пока не опубликован; сборка описана в Windows-инструкции.
+Архив включает .NET; при первом запуске окно подготовки загружает официальные
+VPN-компоненты с проверкой SHA256. Реальный вход через новую GUI-форму требует
+приёмки в вашей среде; выпуск предварительный.
 Старый [Windows Companion 0.1.1](windows/COMPANION.md) сохранён как предыдущий
 экспериментальный клиент и не является текущей Windows-версией.
 

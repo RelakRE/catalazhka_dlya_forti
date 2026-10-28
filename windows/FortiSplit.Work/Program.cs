@@ -10,6 +10,9 @@ internal static class Program
    return Worker.Run(args[1],pid,ticks,false);
   if(args.Length==2 && args[0]=="--recover") return Worker.Run(args[1],0,0,true);
   ApplicationConfiguration.Initialize();
+  if(args.Length==1&&args[0]=="--prepare-runtime"){
+   try{RuntimeSetup.Install(AppContext.BaseDirectory,Console.WriteLine,CancellationToken.None).GetAwaiter().GetResult();return 0;}catch{return 1;}
+  }
   if(args.Length==2&&args[0]=="--self-test")return OfflineChecks.Run(args[1]).GetAwaiter().GetResult();
   if(args.Length==2 && args[0].StartsWith("--preview",StringComparison.Ordinal)) {
    using Form form=args[0] is "--preview-auth" or "--preview-otp"?new AuthDialog(args[0]=="--preview-auth"?new("form","Вход в рабочий VPN","",[new("username","Username",1,[]),new("password","Password",2,[])],"_login"):new("form","Введите одноразовый код из приложения подтверждения","",[new("credential","Token",5,[])]),new Config{User="sample.user"},null):new MainForm(true);
@@ -20,7 +23,7 @@ internal static class Program
   if(args.Length!=0) return 2;
   using var mutex=new Mutex(true,@"Local\FortiSplitWork-UI",out bool first);
   if(!first) { MessageBox.Show("Forti Split уже открыт. Найдите значок рядом с часами."); return 0; }
-  try { Storage.Protect(Storage.Root); Application.Run(new MainForm(false)); return 0; }
+  try { if(!RuntimeSetup.Ensure())return 1; Storage.Protect(Storage.Root); Application.Run(new MainForm(false)); return 0; }
   catch(Exception e) { MessageBox.Show(e.Message,"Forti Split"); return 1; }
  }
 }

@@ -1,0 +1,46 @@
+name: Windows Release
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/windows-release.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: windows-release-1.2.0
+  cancel-in-progress: false
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-2022
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Audit and source tests
+        run: |
+          ./export-public.ps1 -Destination build/source-audit
+          python audit_public.py build/source-audit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B -m unittest test_windows_work test_public_audit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet run --project FortiSplit.Work.Checks -c Release
+      - name: Simulated recovery and native network schema
+        shell: powershell
+        run: |
+          ./test_work_network.ps1
+          ./test_work_platform.ps1
+      - name: Build archive and verify first-run preparation and native offline tests
+        run: ./build-release.ps1 -SourceCommit '${{ github.sha }}'
+      - name: Publish Windows preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create windows-v1.2.0 build/release-assets/* --repo '${{ github.repository }}' --target '${{ github.sha }}' --title 'Forti Split 1.2.0 — Windows x64 Preview' --notes-file RELEASE-NOTES.md --prerelease --latest=false

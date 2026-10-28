@@ -59,4 +59,3 @@ try {
 } finally { $env:LOCALAPPDATA=$originalLocalAppData }
 # Expected failure cases above set LASTEXITCODE. Reaching here means every assertion passed.
 $global:LASTEXITCODE=0
-
