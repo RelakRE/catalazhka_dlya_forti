@@ -1,4 +1,14 @@
-# Review: version 1.2.4
+# Review: version 1.2.5
+
+- Reviewed the authentication timeout change from commit 192fb21: the monotonic
+  deadline is suspended during interactive forms, reset after a reply and checked
+  by the existing OpenConnect command-pipe cancellation path. No real VPN login
+  is performed during release validation.
+- The optional stage callback writes only fixed phase names, a counter and UTC
+  time. Form text, replies and cookies are not passed to it. TLS rejection and
+  current-user/PID checks on the authentication pipe remain enabled.
+- Release version, UI caption, scripts, download links and workflow now identify
+  1.2.5; the already published 1.2.4 assets are not replaced.
 
 - Configured bootstrap IPv4 routes and private-domain NRPT are applied in the connect
   hook before the first lookup; no DNS query runs in the synchronous hook. Resolve

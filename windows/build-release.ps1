@@ -1,8 +1,8 @@
 param([string]$SourceCommit='local')
 $ErrorActionPreference='Stop'
 Set-Location -LiteralPath $PSScriptRoot
-$output=Join-Path $PSScriptRoot 'build\release\Forti-Split-1.2.4-Windows-x64'
-$assets=Join-Path $PSScriptRoot 'build\release-assets\1.2.4'
+$output=Join-Path $PSScriptRoot 'build\release\Forti-Split-1.2.5-Windows-x64'
+$assets=Join-Path $PSScriptRoot 'build\release-assets\1.2.5'
 if(Test-Path -LiteralPath $output){throw 'Release output exists; use a clean checkout.'}
 New-Item -ItemType Directory -Path $assets -Force | Out-Null
 dotnet publish FortiSplit.Work/FortiSplit.Work.csproj -c Release -o $output
@@ -10,7 +10,7 @@ if($LASTEXITCODE -ne 0){throw 'Publish failed'}
 Rename-Item -LiteralPath (Join-Path $output 'FortiSplit.exe') -NewName 'Forti Split.exe'
 Copy-Item profile.example.json,SECURITY.md,THIRD-PARTY.md -Destination $output
 $instructions=@'
-FORTI SPLIT 1.2.4 — WINDOWS x64 (PREVIEW)
+FORTI SPLIT 1.2.5 — WINDOWS x64 (PREVIEW)
 
 Распакуйте весь архив в отдельную папку и откройте «Forti Split.exe».
 При первом запуске нужен интернет: приложение загрузит официальные VPN-компоненты
@@ -53,8 +53,8 @@ foreach($pack in @('microsoft.netcore.app.runtime.win-x64','microsoft.windowsdes
 if(@(Get-ChildItem -LiteralPath $licenses -Recurse -File).Count -lt 2){throw 'Missing .NET licenses'}
 $exe=Join-Path $output 'Forti Split.exe'
 $version=(Get-Item -LiteralPath $exe).VersionInfo.ProductVersion
-if($version -notlike '1.2.4*'){throw 'Release version mismatch'}
-$archive=Join-Path $assets 'Forti-Split-1.2.4-Windows-x64.zip'
+if($version -notlike '1.2.5*'){throw 'Release version mismatch'}
+$archive=Join-Path $assets 'Forti-Split-1.2.5-Windows-x64.zip'
 # Archive the clean app before downloading any third-party binaries for tests.
 Compress-Archive -Path (Join-Path $output '*') -DestinationPath $archive -CompressionLevel Optimal
 $prepare=Start-Process -FilePath $exe -ArgumentList '--prepare-runtime' -PassThru -WindowStyle Hidden
@@ -69,7 +69,7 @@ if(!$validation.Successful){throw 'Incomplete self-test evidence'}
 $runtime=& (Join-Path $output 'client\openconnect.exe') --version 2>$null
 if($LASTEXITCODE -ne 0 -or ($runtime -join '') -notmatch 'v9\.21'){throw 'Unexpected OpenConnect version'}
 $validation | Add-Member -NotePropertyName SourceCommit -NotePropertyValue $SourceCommit
-$validation | Add-Member -NotePropertyName Version -NotePropertyValue '1.2.4'
+$validation | Add-Member -NotePropertyName Version -NotePropertyValue '1.2.5'
 $validation | Add-Member -NotePropertyName Runtime -NotePropertyValue 'OpenConnect 9.21; Wintun 0.14.1; upstream downloads verified with SHA256'
 $validation | Add-Member -NotePropertyName RuntimeBundled -NotePropertyValue $false
 $validation | Add-Member -NotePropertyName RealVpnAcceptance -NotePropertyValue 'not_run'

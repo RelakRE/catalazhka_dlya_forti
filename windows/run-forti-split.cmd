@@ -1,6 +1,6 @@
 @echo off
 setlocal
-set "app=%~dp0build\FortiSplit-1.2.4\FortiSplit.exe"
+set "app=%~dp0build\FortiSplit-1.2.5\FortiSplit.exe"
 if not exist "%app%" (
  echo Application is missing. Run prepare.cmd first.
  pause
