@@ -21,6 +21,18 @@ public sealed record Config
  public string[] DnsDomains { get; set; } = [];
  public string[] Hosts { get; set; } = [];
  public string[] OptionalHosts { get; set; } = [];
+ public static string[] ParseWorkHosts(string text) => text.Split([',',';','\r','\n','\t',' '],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)
+  .Select(value=>{
+   if(value.Contains("://",StringComparison.Ordinal)){
+    if(!Uri.TryCreate(value,UriKind.Absolute,out var url)||url.Scheme is not ("https" or "http")||url.UserInfo.Length>0)throw new ArgumentException("Рабочий сайт: нужна ссылка HTTP/HTTPS без логина и пароля.");
+    value=url.DnsSafeHost;
+   }
+   Host(value);return value.ToLowerInvariant();
+  }).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+ public Config WithWorkAddresses(string[] hosts,string[] domains) {
+  var updated=this with {ExtraHosts=hosts.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),Hosts=hosts.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),DnsDomains=domains.Distinct(StringComparer.OrdinalIgnoreCase).ToArray()};
+  updated.Validate();return updated;
+ }
  public void Validate()
  {
   if (!Uri.TryCreate(Server, UriKind.Absolute, out var uri) || uri.Scheme != "https" || uri.UserInfo != "" || uri.Query != "" || uri.Fragment != "" || uri.Port is < 1 or > 65535)
@@ -80,6 +92,30 @@ public sealed record Config
 }
 
 public sealed record Status(string Stage, string Message, bool Ready = false, bool Restored = false);
+public sealed record WorkAddressRequest(string Id,string[] ExtraHosts,string[] DnsDomains) {
+ public Config ApplyTo(Config current){if(!Guid.TryParseExact(Id,"N",out _))throw new ArgumentException("Неверный запрос рабочих адресов.");return current.WithWorkAddresses(ExtraHosts,DnsDomains);}
+}
+public sealed record WorkAddressResult(string Id,bool Success,string Message);
+public sealed record VpnExitError(string Kind,string Message)
+{
+ // OpenConnect 9.21 main.c maps -EPERM (rejected session cookie) to exit 2.
+ public static VpnExitError Describe(int code,bool tunnelEstablished) => code==2
+  ? new("session_rejected",tunnelEstablished
+   ? "VPN-сервер отклонил текущий сеанс, соединение прервано. Нажмите «Подключить» для нового входа. Если ошибка повторяется, проверьте подключение через FortiClient и передайте ошибку в ИТ."
+   : "Вход с подтверждением выполнен, но VPN-сервер отклонил выданный сеанс при создании туннеля. Нажмите «Подключить» для нового входа. Если ошибка повторяется, проверьте подключение через FortiClient и передайте ошибку в ИТ.")
+  : new("client_stopped",tunnelEstablished
+   ? "VPN-соединение прервано. Причина остановки клиента не определена. Нажмите «Подключить» для нового входа; технические сведения сохранены в vpn-exit.json."
+   : "Вход выполнен, но VPN-клиент остановился до готовности туннеля. Причина не определена. Нажмите «Подключить» для нового входа; технические сведения сохранены в vpn-exit.json.");
+}
+public sealed class WorkDnsRetries
+{
+ private static readonly int[] Delays=[3,10,30];
+ public DateTime NextUtc {get;private set;}=DateTime.MaxValue;
+ public int Attempts {get;private set;}
+ public void Reset(bool unresolved,DateTime now){Attempts=0;NextUtc=unresolved?now.AddSeconds(Delays[0]):DateTime.MaxValue;}
+ public bool TakeDue(DateTime now){if(now<NextUtc)return false;Attempts++;NextUtc=Attempts<Delays.Length?now.AddSeconds(Delays[Attempts]):DateTime.MaxValue;return true;}
+ public void Complete(bool unresolved){if(!unresolved)NextUtc=DateTime.MaxValue;}
+}
 
 public static class LaunchGate
 {

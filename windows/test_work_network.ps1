@@ -8,6 +8,7 @@ New-Item -ItemType Directory -Path $session -Force | Out-Null
 $global:fortiTestroutes=@();$global:fortiTestrules=@();$global:fortiTestips=@();$global:fortiTestfailResolve=$false;$global:fortiTestfailRemove=$false;$global:fortiTestMissingNames=@()
 $global:fortiTestadapter=[pscustomobject]@{ifIndex=77;InterfaceIndex=77;InterfaceGuid='test-guid';Name='FortiSplitWork';Status='Up';InterfaceDescription='Wintun'}
 $global:fortiTestDnsCalls=0;$global:fortiTestCacheClears=0
+$global:fortiTestDnsMap=@{};$global:fortiTestAlias=$false;$global:fortiTestRouteEvents=@()
 function global:Clear-DnsClientCache { [CmdletBinding()]param();$global:fortiTestCacheClears++ }
 function global:Get-NetAdapter { param($InterfaceIndex,[switch]$IncludeHidden); $global:fortiTestadapter }
 function global:Get-NetIPInterface { param($InterfaceIndex,$AddressFamily); [pscustomobject]@{NlMtu=1500} }
@@ -16,13 +17,13 @@ function global:Get-NetIPAddress { param($InterfaceIndex,$AddressFamily); $globa
 function global:New-NetIPAddress { param($InterfaceIndex,$IPAddress,$PrefixLength,$PolicyStore);$global:fortiTestips+=@([pscustomobject]@{IPAddress=$IPAddress;InterfaceIndex=$InterfaceIndex}); }
 function global:Remove-NetIPAddress { [CmdletBinding(SupportsShouldProcess=$true)]param([Parameter(ValueFromPipeline=$true)]$InputObject);process{$global:fortiTestips=@($global:fortiTestips|Where-Object IPAddress -ne $InputObject.IPAddress)} }
 function global:Get-NetRoute { param($InterfaceIndex,$AddressFamily,$PolicyStore);$global:fortiTestroutes }
-function global:New-NetRoute { param($InterfaceIndex,$DestinationPrefix,$NextHop,$RouteMetric,$PolicyStore);$global:fortiTestroutes+=@([pscustomobject]@{InterfaceIndex=$InterfaceIndex;DestinationPrefix=$DestinationPrefix;NextHop=$NextHop;RouteMetric=$RouteMetric}) }
-function global:Remove-NetRoute { [CmdletBinding(SupportsShouldProcess=$true)]param([Parameter(ValueFromPipeline=$true)]$InputObject);process{if($global:fortiTestfailRemove){throw 'fake removal failure'};$global:fortiTestroutes=@($global:fortiTestroutes|Where-Object {$_.DestinationPrefix -ne $InputObject.DestinationPrefix -or $_.InterfaceIndex -ne $InputObject.InterfaceIndex})} }
+function global:New-NetRoute { param($InterfaceIndex,$DestinationPrefix,$NextHop,$RouteMetric,$PolicyStore);$global:fortiTestRouteEvents+=@('add:'+$DestinationPrefix);$global:fortiTestroutes+=@([pscustomobject]@{InterfaceIndex=$InterfaceIndex;DestinationPrefix=$DestinationPrefix;NextHop=$NextHop;RouteMetric=$RouteMetric}) }
+function global:Remove-NetRoute { [CmdletBinding(SupportsShouldProcess=$true)]param([Parameter(ValueFromPipeline=$true)]$InputObject);process{if($global:fortiTestfailRemove){throw 'fake removal failure'};$global:fortiTestRouteEvents+=@('remove:'+$InputObject.DestinationPrefix);$global:fortiTestroutes=@($global:fortiTestroutes|Where-Object {$_.DestinationPrefix -ne $InputObject.DestinationPrefix -or $_.InterfaceIndex -ne $InputObject.InterfaceIndex})} }
 function global:Get-DnsClientNrptRule { $global:fortiTestrules }
 function global:Get-DnsClientNrptPolicy { param([switch]$Effective);throw 'Runtime effective-policy diagnostics must not run' }
 function global:Add-DnsClientNrptRule { param($Namespace,$NameServers,$Comment,$DisplayName);$global:fortiTestrules+=@([pscustomobject]@{Name=[guid]::NewGuid().ToString();Namespace=$Namespace;Comment=$Comment}) }
 function global:Remove-DnsClientNrptRule { param($Name,[switch]$Force);$global:fortiTestrules=@($global:fortiTestrules|Where-Object Name -ne $Name) }
-function global:Resolve-DnsName { [CmdletBinding()]param($Name,$Server,$Type,[switch]$DnsOnly,[switch]$QuickTimeout,[switch]$TcpOnly);$global:fortiTestDnsCalls++;if($global:fortiTestfailResolve -or $global:fortiTestMissingNames -contains $Name){throw 'fake DNS failure'};[pscustomobject]@{IPAddress='198.51.100.80'} }
+function global:Resolve-DnsName { [CmdletBinding()]param($Name,$Server,$Type,[switch]$DnsOnly,[switch]$QuickTimeout,[switch]$TcpOnly);$global:fortiTestDnsCalls++;if($global:fortiTestfailResolve -or $global:fortiTestMissingNames -contains $Name){throw 'fake DNS failure'};if($global:fortiTestAlias){[pscustomobject]@{Type=5;NameHost='alias.example.com'}};$ips=@('198.51.100.80');if($global:fortiTestDnsMap.ContainsKey($Name)){$ips=@($global:fortiTestDnsMap[$Name])};foreach($ip in $ips){[pscustomobject]@{Type=1;IPAddress=$ip}} }
 function Assert($condition,$message){if(-not $condition){throw $message}}
 try {
  @{Hosts=@('desktop.example.com','gateway.example.com','video.example.com')}|ConvertTo-Json|Set-Content (Join-Path $session 'config.json')
@@ -32,7 +33,7 @@ try {
  $s=Get-Content (Join-Path $session 'network.json') -Raw|ConvertFrom-Json
  Assert ($s.Stage -eq 'base_ready') 'Base tunnel not ready'
  Assert ($global:fortiTestroutes.Count -eq 2) 'Only DNS routes expected before resolver'
- Assert ($global:fortiTestrules.Count -eq 0) 'DNS rule must not be created in sync hook'
+ Assert ($global:fortiTestrules.Count -eq 1 -and $global:fortiTestrules[0].Namespace -contains 'desktop.example.com') 'Exact work-name DNS rules must precede the first lookup'
  & $network -Session $session -Mode Resolve
  $s=Get-Content (Join-Path $session 'network.json') -Raw|ConvertFrom-Json
  Assert ($s.Stage -eq 'ready') 'Resolution failed'
@@ -109,6 +110,45 @@ try {
  Assert ($global:fortiTestroutes.Count -eq 0) 'Bootstrap routes not cleaned'
  Assert ($global:fortiTestrules.Count -eq 1 -and $global:fortiTestrules[0].Name -eq 'foreign') 'Bootstrap cleanup touched foreign DNS'
  $global:fortiTestfailResolve=$false
+ # Domain names alone: a transient startup failure is retried, and CNAME records
+ # without IPAddress must not discard the accompanying A record in StrictMode.
+ @{Hosts=@('site.example.com','shared.example.com');OptionalHosts=@();DnsDomains=@()}|ConvertTo-Json|Set-Content (Join-Path $session 'config.json')
+ & $network -Session $session -Mode Hook
+ $global:fortiTestfailResolve=$true
+ & $network -Session $session -Mode Resolve
+ $s=Get-Content (Join-Path $session 'network.json') -Raw|ConvertFrom-Json
+ Assert ($s.Unresolved.Count -eq 2 -and $global:fortiTestroutes.Count -eq 2) 'Startup DNS failure must retain the DNS bootstrap routes'
+ Assert (@($global:fortiTestrules|Where-Object {$_.Namespace -contains 'site.example.com'}).Count -eq 1) 'Failed work name lost exact DNS policy'
+ Assert ($s.DnsFailures.Count -gt 0) 'DNS failures were silently discarded'
+ $global:fortiTestfailResolve=$false;$global:fortiTestAlias=$true
+ & $network -Session $session -Mode Retry
+ $s=Get-Content (Join-Path $session 'network.json') -Raw|ConvertFrom-Json
+ Assert ($s.Unresolved.Count -eq 0 -and $s.Resolved.Count -eq 2 -and $global:fortiTestroutes.Count -eq 3) 'Retry did not recover names through a CNAME response'
+ $before=$global:fortiTestDnsCalls
+ & $network -Session $session -Mode Retry
+ Assert ($global:fortiTestDnsCalls -eq $before) 'Retry queried already resolved names'
+ # One name changes address; the old shared IP remains required by the other.
+ $global:fortiTestDnsMap['site.example.com']=@('198.51.100.81','198.51.100.82')
+ & $network -Session $session -Mode Resolve
+ Assert ($global:fortiTestroutes.Count -eq 5) 'Not all A records routed, or shared address removed'
+ @{Hosts=@('site.example.com');OptionalHosts=@();DnsDomains=@()}|ConvertTo-Json|Set-Content (Join-Path $session 'config.json')
+ & $network -Session $session -Mode Resolve
+ Assert (@($global:fortiTestroutes|Where-Object DestinationPrefix -eq '198.51.100.80/32').Count -eq 0) 'Removed name retained its unshared route'
+ Assert (@($global:fortiTestrules|Where-Object {$_.Namespace -contains 'shared.example.com'}).Count -eq 0) 'Removed name retained DNS policy'
+ $global:fortiTestfailResolve=$true
+ & $network -Session $session -Mode Resolve
+ $s=Get-Content (Join-Path $session 'network.json') -Raw|ConvertFrom-Json
+ Assert ($s.Unresolved.Count -eq 1 -and $global:fortiTestroutes.Count -eq 4) 'Transient refresh failure removed a working route'
+ $global:fortiTestfailResolve=$false;$global:fortiTestRouteEvents=@();$global:fortiTestDnsMap['site.example.com']='198.51.100.83'
+ & $network -Session $session -Mode Retry
+ Assert ($global:fortiTestroutes.Count -eq 3) 'Changed DNS answer left stale routes'
+ Assert ([array]::IndexOf($global:fortiTestRouteEvents,'add:198.51.100.83/32') -lt [array]::IndexOf($global:fortiTestRouteEvents,'remove:198.51.100.81/32')) 'Old route removed before its replacement was installed'
+ @{Hosts=@();OptionalHosts=@();DnsDomains=@()}|ConvertTo-Json|Set-Content (Join-Path $session 'config.json')
+ & $network -Session $session -Mode Resolve
+ Assert ($global:fortiTestroutes.Count -eq 2) 'Empty site list removed DNS routes or retained site routes'
+ Assert ($global:fortiTestrules.Count -eq 1 -and $global:fortiTestrules[0].Name -eq 'foreign') 'Site refresh modified foreign DNS policy'
+ & $network -Session $session -Mode Cleanup
+ Assert ($global:fortiTestroutes.Count -eq 0 -and $global:fortiTestips.Count -eq 0) 'Dynamic routes were not recoverable'
  Write-Output 'NETWORK_CHECKS_PASSED: hook, deferred DNS, route deduplication, no default route, ownership, cleanup, idempotence'
 } finally { $env:LOCALAPPDATA=$originalLocalAppData }
 # Expected failure cases above set LASTEXITCODE. Reaching here means every assertion passed.

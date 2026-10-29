@@ -35,7 +35,7 @@ internal sealed partial class MainForm
      await AuthPipe.Write(server,new AuthReply(false,[]),cancellation.Token);break;
     }
     if(request.Kind!="form"||request.Fields.Length>32)throw new IOException("Неверная форма входа.");
-    string? saved=config.RememberPassword&&request.Fields.Any(f=>AuthPolicy.IsPassword(f,request))?PasswordVault.Load(config.Server,config.User):null;
+    string? saved=request.Attempt==1&&config.RememberPassword&&request.Fields.Any(f=>AuthPolicy.IsPassword(f,request))?PasswordVault.Load(config.Server,config.User):null;
     using(var dialog=new AuthDialog(request,config,saved)){
      saved=null;authDialog=dialog;dialog.ShowDialog(this);authDialog=null;
      AuthReply reply=dialog.Reply();

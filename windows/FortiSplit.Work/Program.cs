@@ -13,9 +13,10 @@ internal static class Program
   }
   if(args.Length==2&&args[0]=="--self-test")return OfflineChecks.Run(args[1]).GetAwaiter().GetResult();
   if(args.Length==2 && args[0].StartsWith("--preview",StringComparison.Ordinal)) {
-   using Form form=args[0] is "--preview-auth" or "--preview-otp"?new AuthDialog(args[0]=="--preview-auth"?new("form","Вход в рабочий VPN","",[new("username","Username",1,[]),new("password","Password",2,[])],"_login"):new("form","Введите одноразовый код из приложения подтверждения","",[new("credential","Token",5,[])]),new Config{User="sample.user"},null):new MainForm(true);
+   using Form form=args[0].StartsWith("--preview-help-",StringComparison.Ordinal)?new SettingsHelpDialog(SettingsHelp.Get(args[0]["--preview-help-".Length..])):args[0] is "--preview-auth" or "--preview-otp" or "--preview-otp-repeat"?new AuthDialog(args[0]=="--preview-auth"?new("form","Вход в рабочий VPN","",[new("username","Username",1,[]),new("password","Password",2,[])],"_login"):new("form","Введите одноразовый код из приложения подтверждения","",[new("credential","Token",5,[])],Attempt:args[0]=="--preview-otp-repeat"?2:1),new Config{User="sample.user"},null):new MainForm(true);
    if(args[0]=="--preview-settings"&&form is MainForm main)main.ShowSettings();
    form.Show(); Application.DoEvents();
+   if(args[0]=="--preview-sites"&&form is MainForm sites){sites.ShowWorkSites();Application.DoEvents();}
    using var bmp=new Bitmap(form.Width,form.Height); form.DrawToBitmap(bmp,new Rectangle(Point.Empty,bmp.Size)); bmp.Save(Path.GetFullPath(args[1])); return 0;
   }
   if(args.Length!=0) return 2;

@@ -42,22 +42,43 @@ server, local RDP file and optional TrueConf settings in the app or import a pri
 JSON profile. Existing profiles under `%LOCALAPPDATA%\Forti Split Work` are reused.
 Private profile exports end in `.local.json` and must stay outside Git.
 
-The private network profile should include known gateway IPv4 addresses in
-`ExtraHosts` and private DNS suffixes (without a leading dot) in `DnsDomains`.
-Those IP routes and domain DNS policies are installed before any tunnel DNS query,
-and the DNS cache is cleared once. This follows the WorkVPN bootstrap approach:
-the first failed DNS lookup cannot prevent the gateway routes or domain policy
-from being installed. No per-PC allowlist is required for RDP through that gateway.
-Use the network administrator's actual values; public examples remain blank.
-Import the updated private profile, then set your own username and local RDP file.
+`ExtraHosts` can contain DNS names, IPv4 addresses, or a mixture. In Settings,
+expand Advanced and use **Рабочие сайты / имена / IPv4**: the field also accepts
+full HTTP/HTTPS links and stores only their hostnames, ignoring ports and paths.
+Separate entries with commas or newlines. IP addresses do not need to be known in
+advance. JSON profiles retain the existing hostname/IPv4 format. Optional private
+DNS suffixes in `DnsDomains` have no leading dot; each explicitly added hostname
+gets its own exact DNS rule even without a suffix. Redirects to another hostname
+require adding that hostname too. Resolution and host routes currently use IPv4.
+
+VPN DNS routes, optional literal IP routes and work-name/domain DNS rules are
+installed before any tunnel DNS query. DNS lookup runs after the synchronous
+OpenConnect hook. Missing names get up to three additional attempts, after 3, 10
+and 30 seconds from the preceding attempt. A lookup pass stops starting queries
+after 15 seconds; an in-flight QuickTimeout query may finish later. Already
+resolved names are skipped during these retries. An unresolved name does not
+disconnect the VPN and its count appears in the connected status.
+
+While connected, edit just the work names/DNS domains and click **Применить рабочие
+адреса** to save them and resolve their current IPs without reconnecting or entering
+2FA again. The elevated worker validates a bounded address-only request in the
+private session directory; it cannot change the VPN server or authentication.
+Replacement routes are added before obsolete session-owned routes are removed.
+An IP shared by another work name or VPN DNS is retained. A temporary DNS failure
+keeps that name's previous routes; deleting the name explicitly removes routes
+no longer needed elsewhere. Disconnect/recovery removes all session-owned changes.
+There is no continuous DNS polling or TTL-based refresh; applying addresses or
+reconnecting performs a fresh lookup. Use actual internal values in private
+profiles; public examples remain blank.
 
 The app does not approve or reject RDP destination names or pre-test RDP ports.
 Any selected local RDP file is passed unchanged to mstsc, including short computer
 names and system gateway profiles. Recognizable endpoints are best-effort route
 hints only. DNS failure for a target, gateway or other work endpoint does not stop
 the authenticated VPN tunnel; actual RDP errors are handled by the Windows client.
-Work routes and DNS are configured once on connection and on an actual OpenConnect
-reconnect. There are no periodic network diagnostics, internet probes or watchdog.
+Work routes and DNS are configured on connection, actual OpenConnect reconnect,
+bounded retries of unresolved names, and explicit application of work addresses.
+There are no periodic network diagnostics, internet probes or watchdog.
 Normal Disconnect/Exit removes the session's settings. After a crash or unexpected
 disconnect, press Restore Network: it stops only the recorded VPN process and removes
 the app's own settings. Existing profiles and private credentials are reused.
@@ -67,15 +88,35 @@ the RDP file. Configure TrueConf if needed. Password/OTP are entered at connecti
 Disconnect FortiClient before using this app. A UAC prompt starts the network worker.
 The UI and launched work apps retain ordinary user rights.
 
+Every settings field and option has a short description and a clickable **?**.
+The help window explains the input format, where to obtain the value, and when it
+can be left empty. Examples are always fictional documentation-only values, clearly
+marked as examples. Help never reads current field values or profile data.
+Help remains available while settings
+are locked by an active VPN session. It does not change settings or send examples
+anywhere; real addresses and usernames are never embedded in public help sources.
+
 ## Verification limits
 
 Offline tests cover configuration, native ABI initialization, Credential Manager,
 private IPC and mocked network setup/recovery. They do not prove compatibility with
 every gateway or successful RDP login/video calls. A real login requires user credentials.
 During authentication, network waits are cancelled after 90 seconds; time spent
-entering a password or MFA response in the app is not counted. A private
+entering a password or MFA response in the app is not counted. A timeout permanently
+ends that authentication attempt: subsequent native callbacks cannot show another
+form or restart the deadline. A failed HTTP response read also stops repeated form
+callbacks instead of asking for another MFA response. A private
 `auth-stage.json` records only the latest fixed phase name, step number and UTC
-timestamp, without form contents, credentials, server replies or cookies.
+timestamp. `auth-trace.json` retains up to 160 fixed phase/form-category events and
+numeric HTTP status codes, with timestamps; neither file retains form contents,
+credentials, server response bodies, headers or cookies. HTTP status extraction is
+limited to the known upstream printf literal on Windows x64; other progress output
+is discarded. Repeated login/challenge forms show an attempt counter, do not refill
+the saved password after the first login form, and stop before a seventh form of
+either category. A repeated form alone does not establish invalid credentials.
+OpenConnect exit 2 is reported as a rejected VPN session after authentication,
+not as an invalid password/OTP. `vpn-exit.json` retains only the exit code, fixed
+phase/reason and timestamp; unknown exit codes are not assigned an invented cause.
 Do not publish sessions, profiles, RDP files, dumps or screenshots containing work data.
 
 Public export audit:

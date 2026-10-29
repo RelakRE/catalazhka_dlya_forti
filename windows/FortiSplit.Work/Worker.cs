@@ -68,9 +68,12 @@ internal static class Worker
    if(stop.WaitOne(0) || parent.HasExited) return 0;
    State(folder,"authenticating","Введите данные входа в окне приложения.");
    int authStep=0;
+   var authTrace=new List<object>();
+   void TraceAuth(string evt){if(authTrace.Count>=160)return;authTrace.Add(new{Event=evt,UpdatedUtc=DateTime.UtcNow});Storage.Save(Path.Combine(folder,"auth-trace.json"),authTrace);}
    AuthSession login=AuthPipe.Login(id,parentId,config,()=>stop.WaitOne(0)||parent.HasExited,phase=>{
     // Fixed phase names only: never log forms, replies, credentials or cookies.
     Storage.Save(Path.Combine(folder,"auth-stage.json"),new{Phase=phase,Step=++authStep,UpdatedUtc=DateTime.UtcNow});
+    TraceAuth(phase);
     string message=phase switch{
      "form_requested"=>"Введите данные, запрошенные VPN, в окне приложения.",
      "form_submitted"=>"Данные отправлены. Ожидаем ответ сервера VPN и запрос подтверждения…",
@@ -78,7 +81,7 @@ internal static class Worker
      _=>"Ожидаем ответ сервера VPN…"
     };
     State(folder,"authenticating",message);
-   });
+   },TraceAuth);
    if(stop.WaitOne(0)||parent.HasExited)throw new OperationCanceledException();
    if(!AllocConsole() || !SetConsoleCtrlHandler(handler,true)) throw new IOException("Не удалось подготовить VPN-процесс.");
    ShowWindow(GetConsoleWindow(),0);
@@ -92,6 +95,16 @@ internal static class Worker
    _=Drain(vpn.StandardOutput);_=Drain(vpn.StandardError);
    State(folder,"preparing","Вход выполнен. Создаём рабочий туннель…");
    string generation="";
+   string lastWorkRequest="";
+   var dnsRetries=new WorkDnsRetries();
+   bool ShowNetworkReady(){
+    var currentNetwork=Storage.Read<System.Text.Json.JsonElement>(Path.Combine(folder,"network.json"));
+    generation=currentNetwork.GetProperty("Generation").GetString()!;
+    int unresolved=currentNetwork.TryGetProperty("Unresolved",out var names)?names.GetArrayLength():0;
+    string message="VPN подключён. Рабочие адреса настроены; обычный интернет остаётся напрямую.";
+    if(unresolved>0)message+=$" DNS пока не определил имена: {unresolved}. Их можно повторно применить в настройках.";
+    State(folder,"connected",message,true);return unresolved>0;
+   }
    while(!vpn.HasExited && !stop.WaitOne(0) && !consoleStop) {
     string path=Path.Combine(folder,"network.json");
     if(generation.Length==0&&File.Exists(Path.Combine(folder,"network-error.txt")))throw new IOException("Не удалось применить настройки подключения. Нажмите «Восстановить сеть».");
@@ -101,13 +114,39 @@ internal static class Worker
       State(folder,"configuring","VPN вошёл. Настраиваем рабочий туннель…");
       if(Script(folder,"Resolve").GetAwaiter().GetResult()!=0) throw new IOException("Не удалось настроить рабочие адреса. Смотрите network-error.txt.");
       if(vpn.HasExited || stop.WaitOne(0) || consoleStop) break;
-      generation=current;
-      State(folder,"connected","VPN подключён. Можно открыть RDP или TrueConf; обычный интернет остаётся напрямую.",true);
+      dnsRetries.Reset(ShowNetworkReady(),DateTime.UtcNow);
+     }
+    }
+    if(generation.Length>0&&!vpn.HasExited&&!stop.WaitOne(0)&&!consoleStop){
+     string requestPath=Path.Combine(folder,"work-address-request.json");
+     if(File.Exists(requestPath)){
+      var request=Storage.Read<WorkAddressRequest>(requestPath);
+      if(request.Id!=lastWorkRequest){
+       Config? updated=null;
+       try{updated=request.ApplyTo(config);}catch(ArgumentException e){Storage.Save(Path.Combine(folder,"work-address-result.json"),new WorkAddressResult(request.Id,false,e.Message));}
+       lastWorkRequest=request.Id;
+       if(updated is not null){
+        State(folder,"connected","Обновляем IP рабочих сайтов через DNS VPN…",true);
+        Storage.Save(Path.Combine(folder,"config.json"),updated);config=updated;
+        if(Script(folder,"Resolve").GetAwaiter().GetResult()!=0)throw new IOException("Не удалось обновить рабочие адреса. Смотрите network-error.txt.");
+        if(vpn.HasExited||stop.WaitOne(0)||consoleStop)break;
+        dnsRetries.Reset(ShowNetworkReady(),DateTime.UtcNow);
+        Storage.Save(Path.Combine(folder,"work-address-result.json"),new WorkAddressResult(request.Id,true,"Рабочие адреса применены."));
+       }
+      }
+     }
+     if(dnsRetries.TakeDue(DateTime.UtcNow)){
+      if(Script(folder,"Retry").GetAwaiter().GetResult()!=0)throw new IOException("Не удалось повторно определить рабочие адреса. Смотрите network-error.txt.");
+      if(vpn.HasExited||stop.WaitOne(0)||consoleStop)break;
+      dnsRetries.Complete(ShowNetworkReady());
      }
     }
     Thread.Sleep(500);
    }
-   if(vpn.HasExited && !stop.WaitOne(0) && !consoleStop) failure="VPN-клиент завершил соединение, код "+vpn.ExitCode+". Для нового входа нажмите «Подключить».";
+   if(vpn.HasExited && !stop.WaitOne(0) && !consoleStop){
+    var error=VpnExitError.Describe(vpn.ExitCode,generation.Length>0);failure=error.Message;
+    Storage.Save(Path.Combine(folder,"vpn-exit.json"),new{ExitCode=vpn.ExitCode,Phase=generation.Length>0?"tunnel_active":"creating_tunnel",Reason=error.Kind,UpdatedUtc=DateTime.UtcNow});
+   }
   } catch(OperationCanceledException) { failure="Вход отменён."; }
   catch(Exception e) { failure=e.Message;if(recovery||!locked)State(folder,"recovery_required",failure); }
   finally {

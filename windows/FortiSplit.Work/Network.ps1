@@ -1,4 +1,4 @@
-﻿param([ValidateSet('Hook','Resolve','Cleanup')][string]$Mode='Hook',[Parameter(Mandatory=$true)][string]$Session)
+﻿param([ValidateSet('Hook','Resolve','Retry','Cleanup')][string]$Mode='Hook',[Parameter(Mandatory=$true)][string]$Session)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 3
 $Session=[IO.Path]::GetFullPath($Session)
@@ -59,6 +59,10 @@ function Add-Route([string]$IP) {
  $script:state.Routes=@($script:state.Routes)+@($prefix); Save-State
  New-NetRoute -InterfaceIndex $script:state.Index -DestinationPrefix $prefix -NextHop $script:state.Address -RouteMetric 1 -PolicyStore ActiveStore | Out-Null
 }
+function Remove-OwnedRoute([string]$Prefix) {
+ foreach($route in @(Get-NetRoute -AddressFamily IPv4 -PolicyStore ActiveStore | Where-Object { $_.InterfaceIndex -eq $script:state.Index -and $_.DestinationPrefix -eq $Prefix -and $_.NextHop -eq $script:state.Address -and $_.RouteMetric -eq 1 })) { $route | Remove-NetRoute -Confirm:$false }
+ $script:state.Routes=@($script:state.Routes|Where-Object {$_ -ne $Prefix});Save-State
+}
 try {
  try { $locked=$mutex.WaitOne(30000) } catch [Threading.AbandonedMutexException] { $locked=$true }
  if (-not $locked) { throw 'Network operation still running' }
@@ -74,6 +78,7 @@ try {
  $domainNamespaces=@($domains|ForEach-Object {'.'+$_})
  if (@($config.Hosts).Count + $optionalHosts.Count -gt 40) { throw 'Host count bound' }
  foreach ($name in @($config.Hosts)+$optionalHosts) { Assert-Host $name }
+ $workNamespaces=@(@($domainNamespaces)+@($config.Hosts|Where-Object {$_ -match '[a-zA-Z]'})|Select-Object -Unique)
  if ($Mode -eq 'Hook') {
   if ($env:TUNIDX -notmatch '^\d+$') { throw 'No tunnel adapter index' }
   $index=[int]$env:TUNIDX; $address=$env:INTERNAL_IP4_ADDRESS; Assert-IP $address
@@ -94,46 +99,65 @@ try {
   # Bootstrap IPs and private-domain DNS must be ready before the first lookup.
   # OpenConnect's synchronous hook must not wait for a query through this tunnel.
   foreach($name in @($config.Hosts)){$literal=$null;if([Net.IPAddress]::TryParse($name,[ref]$literal)){Add-Route $name}}
-  if($domainNamespaces.Count){Add-DnsClientNrptRule -Namespace $domainNamespaces -NameServers $dns -Comment $tag -DisplayName 'Forti Split Work' | Out-Null}
+  if($workNamespaces.Count){Add-DnsClientNrptRule -Namespace $workNamespaces -NameServers $dns -Comment $tag -DisplayName 'Forti Split Work' | Out-Null}
   Clear-DnsClientCache -ErrorAction SilentlyContinue
   $script:state.Stage='base_ready'; Save-State
   return
  }
  $script:state=Read-State
  if ($null -eq $script:state) { throw 'Tunnel settings unavailable' }
+ $adapter=Get-NetAdapter -InterfaceIndex $script:state.Index
+ if($adapter.Name -ne 'FortiSplitWork' -or [string]$adapter.InterfaceGuid -ne $script:state.Guid){throw 'Tunnel adapter changed'}
  # This runs AFTER the synchronous OpenConnect hook, so tunnel receive stays live.
  $script:state.Stage='resolving'; Save-State
- $resolved=@(); $unresolved=@()
- foreach ($name in @($config.Hosts)+$optionalHosts) {
+ $previous=@($script:state.Resolved);$previousUnresolved=@();if($script:state.PSObject.Properties['Unresolved']){$previousUnresolved=@($script:state.Unresolved)}
+ $resolved=@(); $unresolved=@(); $dnsFailures=@()
+ $lookupDeadline=[DateTime]::UtcNow.AddSeconds(15)
+ foreach ($name in @(@($config.Hosts)+$optionalHosts|Select-Object -Unique)) {
   $literal=$null; $addresses=@()
+  $saved=@($previous|Where-Object Host -eq $name)
+  if($Mode -eq 'Retry' -and $saved.Count -and $previousUnresolved -notcontains $name){$resolved+=@($saved[0]);continue}
   if ([Net.IPAddress]::TryParse($name,[ref]$literal)) { Assert-IP $name; $addresses=@($name) }
   else {
    foreach ($server in $script:state.Dns) {
+    if([DateTime]::UtcNow -ge $lookupDeadline){break}
     foreach ($tcp in @($false,$true)) {
+     if([DateTime]::UtcNow -ge $lookupDeadline){break}
      try {
       $query=@{Name=$name;Server=$server;Type='A';DnsOnly=$true;QuickTimeout=$true;ErrorAction='Stop'}
       if ($tcp) { $query.TcpOnly=$true }
-      $addresses=@(Resolve-DnsName @query | Where-Object IPAddress | Select-Object -ExpandProperty IPAddress -Unique)
+      $addresses=@(Resolve-DnsName @query | Where-Object { $_.PSObject.Properties['IPAddress'] -and $_.Type -eq 1 } | Select-Object -ExpandProperty IPAddress -Unique)
       if ($addresses.Count) { break }
-     } catch { }
+     } catch { $dnsFailures+=@([pscustomobject]@{Host=$name;Server=$server;Transport=$(if($tcp){'TCP'}else{'UDP'});ErrorType=$_.Exception.GetType().Name}) }
     }
     if ($addresses.Count) { break }
    }
-   if (-not $addresses.Count) {
-    try { $addresses=@(Resolve-DnsName -Name $name -Type A -QuickTimeout -ErrorAction Stop | Where-Object IPAddress | Select-Object -ExpandProperty IPAddress -Unique) }
+   if (-not $addresses.Count -and [DateTime]::UtcNow -lt $lookupDeadline) {
+    try { $addresses=@(Resolve-DnsName -Name $name -Type A -QuickTimeout -ErrorAction Stop | Where-Object { $_.PSObject.Properties['IPAddress'] -and $_.Type -eq 1 } | Select-Object -ExpandProperty IPAddress -Unique) }
     catch { }
    }
   }
-  if (-not $addresses.Count -or $addresses.Count -gt 16) { $unresolved+=@($name); continue }
+  if (-not $addresses.Count -or $addresses.Count -gt 16) {
+   $unresolved+=@($name)
+   # Retain a working route during a transient DNS failure. Explicitly removed
+   # names are not in this loop and therefore lose their routes below.
+   if($saved.Count){$resolved+=@($saved[0])}
+   continue
+  }
   foreach ($ip in $addresses) { Add-Route $ip }
   $resolved+=@([pscustomobject]@{Host=$name;Addresses=$addresses})
  }
- # Configured private domains and work names only; never global DNS/default routes.
- $names=@(@($domainNamespaces)+@($resolved | ForEach-Object Host | Where-Object { $_ -match '[a-zA-Z]' }) | Select-Object -Unique)
+ # Add replacement routes first, then retire only obsolete routes owned by this
+ # session. Shared IPs and VPN DNS routes remain until their last user is removed.
+ $desired=@(@($script:state.Dns)+@($resolved|ForEach-Object Addresses)|Select-Object -Unique|ForEach-Object {Assert-IP $_;$_+'/32'})
+ foreach($prefix in @($script:state.Routes)){if($desired -notcontains $prefix){Remove-OwnedRoute $prefix}}
+ # Mandatory work names get exact DNS rules even if their first lookup fails.
+ $names=@(@($workNamespaces)+@($resolved | ForEach-Object Host | Where-Object { $_ -match '[a-zA-Z]' }) | Select-Object -Unique)
  foreach ($rule in @(Get-DnsClientNrptRule | Where-Object Comment -eq $tag)) { Remove-DnsClientNrptRule -Name $rule.Name -Force }
  if ($names.Count) { Add-DnsClientNrptRule -Namespace $names -NameServers $script:state.Dns -Comment $tag -DisplayName 'Forti Split Work' | Out-Null }
  Clear-DnsClientCache -ErrorAction SilentlyContinue
  $script:state | Add-Member -NotePropertyName Unresolved -NotePropertyValue $unresolved -Force
+ $script:state | Add-Member -NotePropertyName DnsFailures -NotePropertyValue $dnsFailures -Force
  $script:state.Resolved=$resolved; $script:state.Stage='ready'; Save-State
 } catch {
  # No auth environment or secrets are written here.
