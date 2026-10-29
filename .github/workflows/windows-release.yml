@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: windows-release-1.2.5
+  group: windows-release-1.2.6
   cancel-in-progress: false
 jobs:
   release:
@@ -43,4 +43,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create windows-v1.2.5 build/release-assets/1.2.5/* --repo '${{ github.repository }}' --target '${{ github.sha }}' --title 'Forti Split 1.2.5 — Windows x64 Preview' --notes-file RELEASE-NOTES.md --prerelease --latest=false
+          gh release create windows-v1.2.6 build/release-assets/1.2.6/* --repo '${{ github.repository }}' --target '${{ github.sha }}' --title 'Forti Split 1.2.6 — Windows x64 Preview' --notes-file RELEASE-NOTES.md --prerelease --latest=false

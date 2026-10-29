@@ -5,10 +5,10 @@
 
 | Платформа | Текущая версия | Инструкция |
 | --- | --- | --- |
-| Windows x64 | 1.2.5 Preview | [Скачать](https://github.com/RelakRE/catalazhka_dlya_forti/releases/tag/windows-v1.2.5), [инструкция](windows/README.md) |
+| Windows x64 | 1.2.6 Preview | [Скачать](https://github.com/RelakRE/catalazhka_dlya_forti/releases/tag/windows-v1.2.6), [инструкция](windows/README.md) |
 | macOS Intel | 1.4.1 Intel Preview | [Скачать](https://github.com/RelakRE/catalazhka_dlya_forti/releases/tag/v1.4.1), инструкция ниже |
 
-Windows 1.2.5 использует OpenConnect: вход, пароль и 2FA вводятся в интерфейсе,
+Windows 1.2.6 использует OpenConnect: вход, пароль и 2FA вводятся в интерфейсе,
 рабочие адреса получают отдельные маршруты и DNS-правила. Есть запуск RDP/TrueConf,
 трей и сохранение пароля по выбору пользователя в Windows Credential Manager.
 Архив включает .NET; при первом запуске окно подготовки загружает официальные

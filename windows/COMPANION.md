@@ -1,4 +1,4 @@
-> Historical Companion 0.1.1. Current Windows client: [1.2.5](README.md).
+> Historical Companion 0.1.1. Current Windows client: [1.2.6](README.md).
 
 # Forti Split — Windows Companion 0.1 Preview
 
