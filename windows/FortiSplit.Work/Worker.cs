@@ -76,7 +76,7 @@ internal static class Worker
     TraceAuth(phase);
     string message=phase switch{
      "form_requested"=>"Введите данные, запрошенные VPN, в окне приложения.",
-     "form_submitted"=>"Данные отправлены. Ожидаем ответ сервера VPN и запрос подтверждения…",
+     "form_submitted"=>"Ответ формы передан VPN-клиенту. Ожидаем сервер; вход ещё не подтверждён. Может появиться повторный запрос пароля или кода…",
      "cookie_obtained"=>"Сервер VPN подтвердил вход. Подготавливаем туннель…",
      _=>"Ожидаем ответ сервера VPN…"
     };
@@ -162,7 +162,7 @@ internal static class Worker
      }else{
       bool pending=File.Exists(Path.Combine(folder,"network.json"))||(vpn is not null&&!vpn.HasExited);
       if(!pending)File.Delete(Path.Combine(folder,"vpn-process.json"));
-      State(folder,pending?"recovery_required":"error",failure+(pending?" Нажмите «Восстановить сеть».":""),restored:!pending);
+      State(folder,pending?"recovery_required":"error",failure+(pending?" Сначала нажмите «Восстановить сеть» и дождитесь подтверждения очистки. Затем нажмите «Подключить» для нового входа.":""),restored:!pending);
      }
     } catch(Exception e) { try { State(folder,"recovery_required","Ошибка завершения: "+e.Message); } catch(Exception) { } }
    }

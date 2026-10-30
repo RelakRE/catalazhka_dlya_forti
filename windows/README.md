@@ -114,6 +114,12 @@ limited to the known upstream printf literal on Windows x64; other progress outp
 is discarded. Repeated login/challenge forms show an attempt counter, do not refill
 the saved password after the first login form, and stop before a seventh form of
 either category. A repeated form alone does not establish invalid credentials.
+Login and confirmation dialogs explain repeated requests separately. A repeated
+login request is not a password-change request; saved passwords are not filled again.
+Submitting a form does not confirm login. After an unexpected disconnect with
+pending network changes, restore the network before starting a new connection;
+Connect stays disabled until recovery completes. The app does not promise an
+unlimited session duration: the server can reject an existing session.
 OpenConnect exit 2 is reported as a rejected VPN session after authentication,
 not as an invalid password/OTP. `vpn-exit.json` retains only the exit code, fixed
 phase/reason and timestamp; unknown exit codes are not assigned an invented cause.

@@ -6,10 +6,16 @@ internal sealed class AuthDialog : Form
  internal readonly CheckBox Remember=new(){Text="Сохранять пароль",AutoSize=true};
  internal AuthDialog(AuthRequest request,Config config,string? saved)
  {
-  Text="Вход в VPN";ClientSize=new Size(480,240);AutoSize=true;AutoSizeMode=AutoSizeMode.GrowAndShrink;MinimumSize=new Size(480,240);MaximumSize=new Size(700,900);StartPosition=FormStartPosition.CenterParent;MinimizeBox=false;MaximizeBox=false;Font=new Font("Segoe UI",11);BackColor=Color.White;
+  bool login=AuthPolicy.FormCategory(request)=="login";
+  Text=login?"Вход в VPN — логин и пароль":"Вход в VPN — код подтверждения";ClientSize=new Size(480,240);AutoSize=true;AutoSizeMode=AutoSizeMode.GrowAndShrink;MinimumSize=new Size(480,240);MaximumSize=new Size(700,900);StartPosition=FormStartPosition.CenterParent;MinimizeBox=false;MaximizeBox=false;Font=new Font("Segoe UI",11);BackColor=Color.White;
   var layout=new FlowLayoutPanel{AutoSize=true,FlowDirection=FlowDirection.TopDown,WrapContents=false,Padding=new Padding(24),MaximumSize=new Size(620,0)};Controls.Add(layout);
   var description=new Label{Text=request.Error.Length>0?request.Error:request.Message.Length>0?request.Message:"Введите данные, запрошенные сервером VPN.",AutoSize=true,MaximumSize=new Size(420,220),Margin=new Padding(0,0,0,18)};layout.Controls.Add(description);
-  if(request.Attempt>1)layout.Controls.Add(new Label{Text=$"Повторная форма входа ({request.Attempt}/6). Вход ещё не подтверждён. Причина повтора может быть не указана.",AutoSize=true,MaximumSize=new Size(420,140),ForeColor=Color.DarkOrange,Margin=new Padding(0,0,0,12)});
+  string guidance=request.Attempt>1
+   ? login?$"Снова запрошены логин и пароль (запрос {request.Attempt} из 6). Это не смена пароля. Сохранённый пароль повторно не подставляется — введите его вручную. Повтор формы сам по себе не доказывает ошибку пароля."
+          :$"Снова запрошен код или ответ (запрос {request.Attempt} из 6). Предыдущая отправка не завершила вход. Причина повтора может быть не указана. Если используете одноразовые коды, введите свежий код."
+   :login?"Введите рабочий логин и пароль. После отправки дождитесь ответа VPN; затем может появиться запрос кода."
+         :"Введите код подтверждения или ответ, запрошенный VPN. Подключение будет подтверждено только после завершения входа и подготовки туннеля.";
+  layout.Controls.Add(new Label{Text=guidance,AutoSize=true,MaximumSize=new Size(420,0),ForeColor=request.Attempt>1?Color.FromArgb(150,75,0):Color.FromArgb(60,70,80),Margin=new Padding(0,0,0,12)});
   foreach(var field in request.Fields){layout.Controls.Add(new Label{Text=AuthPolicy.Caption(field,request),AutoSize=true,MaximumSize=new Size(420,80),Margin=new Padding(0,8,0,4)});Control input;
    if(field.Type==3){var combo=new ComboBox{DropDownStyle=ComboBoxStyle.DropDownList,Width=420};combo.DataSource=field.Choices;combo.DisplayMember="Label";combo.ValueMember="Value";input=combo;}
    else input=new TextBox{Width=420,UseSystemPasswordChar=field.Type is 2 or 5,Text=AuthPolicy.IsUser(field)?config.User:AuthPolicy.IsPassword(field,request)?saved??"":"",MaxLength=4096};
