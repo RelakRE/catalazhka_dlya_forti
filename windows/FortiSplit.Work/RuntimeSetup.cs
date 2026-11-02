@@ -13,7 +13,7 @@ internal static class RuntimeSetup
  {
   if(Ready(AppContext.BaseDirectory))return true;
   using var window=new Form{Text="Подготовка Forti Split",ClientSize=new Size(570,190),StartPosition=FormStartPosition.CenterScreen,FormBorderStyle=FormBorderStyle.FixedDialog,MaximizeBox=false,MinimizeBox=false,Font=new Font("Segoe UI",10)};
-  var label=new Label{Text="Подготовка VPN-компонентов из официальных загрузок…\nНужен доступ в интернет. Это выполняется один раз.",AutoSize=false,Bounds=new Rectangle(20,20,530,65)};
+  var label=new Label{Text="Подготавливаем VPN-компоненты из официальных источников.\nНужен интернет; обычно это требуется один раз.",AutoSize=false,Bounds=new Rectangle(20,20,530,65)};
   var progress=new ProgressBar{Style=ProgressBarStyle.Marquee,Bounds=new Rectangle(20,95,530,20)};
   var cancel=new Button{Text="Отмена",Bounds=new Rectangle(430,135,120,32)};
   window.Controls.AddRange([label,progress,cancel]);
@@ -24,7 +24,7 @@ internal static class RuntimeSetup
    running=true;
    try{await Install(AppContext.BaseDirectory,message=>label.Text=message,cancellation.Token);completed=true;}
    catch(OperationCanceledException){}
-   catch(Exception){MessageBox.Show(window,"Не удалось подготовить VPN-компоненты. Проверьте интернет и распакуйте приложение в доступную для записи папку. Затем запустите снова.","Forti Split",MessageBoxButtons.OK,MessageBoxIcon.Error);}
+   catch(Exception){MessageBox.Show(window,"Не удалось подготовить VPN-компоненты. Проверьте интернет и убедитесь, что приложение распаковано в доступную для записи папку. Затем попробуйте снова.","Forti Split",MessageBoxButtons.OK,MessageBoxIcon.Error);}
    finally{running=false;window.Close();}
   };
   window.ShowDialog();return completed;
@@ -40,7 +40,7 @@ internal static class RuntimeSetup
   using var http=new HttpClient{Timeout=TimeSpan.FromMinutes(5)};
   try{
    async Task<string> Download(string name,string url,string sha){
-    progress("Подготовка VPN-компонентов: "+name+"\nСоединение с VPN не выполняется.");
+    progress("Загружаем VPN-компонент: "+name+"\nVPN сейчас не подключается.");
     string path=Path.Combine(temporary,name);
     using var response=await http.GetAsync(url,HttpCompletionOption.ResponseHeadersRead,token);response.EnsureSuccessStatusCode();
     if(response.Content.Headers.ContentLength>100*1024*1024)throw new IOException("Download too large");
@@ -64,7 +64,7 @@ internal static class RuntimeSetup
     try{await process.WaitForExitAsync(timeout.Token);}catch{try{process.Kill(true);}catch{}throw;}
     await Task.WhenAll(stdout,stderr);if(process.ExitCode!=0)throw new IOException("Cannot extract runtime");
    }
-   progress("Распаковка VPN-компонентов…\nСоединение с VPN не выполняется.");
+   progress("Распаковываем VPN-компоненты…\nVPN сейчас не подключается.");
    string tools=Path.Combine(temporary,"tools"),unpacked=Path.Combine(temporary,"vpn"),staged=Path.Combine(temporary,"runtime");
    await Extract(extractor,archiveTool,tools);await Extract(Path.Combine(tools,"7z.exe"),vpn,unpacked);
    Directory.CreateDirectory(staged);

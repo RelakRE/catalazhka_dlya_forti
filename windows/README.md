@@ -10,19 +10,36 @@ and session cookies are never saved in profiles or logs.
 
 ## Download and first launch
 
-Download the Windows preview from [Releases](https://github.com/RelakRE/catalazhka_dlya_forti/releases/tag/windows-v1.2.6).
+Download the Windows preview from [Releases](https://github.com/RelakRE/catalazhka_dlya_forti/releases/tag/windows-v1.2.7).
 Extract the complete archive and run `Forti Split.exe`. .NET is included.
 The first launch downloads and prepares upstream OpenConnect 9.21 and Wintun 0.14.1
 in a progress window, without a console. Internet and a writable app folder are
 required. Executable downloads are checked against pinned SHA256 values before use.
 Existing complete runtimes are reused. See [release notes](RELEASE-NOTES.md).
 
+## Update notifications
+
+The app checks the public GitHub release list once at startup. It looks for newer
+Windows releases, including previews, with the expected Windows x64 ZIP. In Settings,
+**Открыть выпуск** opens the project release page. An unavailable network does not
+block VPN use. The check sends no VPN profile, credentials or authentication codes.
+
+When an update is available, **Обновить** downloads and checks the release after the
+user disconnects the VPN. The app verifies the GitHub asset's size and SHA-256,
+validates the archive and installs into a separate LocalAppData folder. Existing VPN
+runtime files and settings are retained. The app switches to the new version only
+after preparation and restarts it; the previous installation remains available if
+the switch fails. **Открыть выпуск** remains available for manual installation.
+Only packages with `fortisplit-update-v1.json` support the automatic restart protocol;
+older releases need manual installation. A GitHub checksum detects corruption but is
+not an independent publisher signature. Current preview releases are unsigned.
+
 ## Build from source
 
 Windows x64, .NET SDK 10 and Windows PowerShell 5.1 are required.
 
     dotnet restore FortiSplit.Work/FortiSplit.Work.csproj
-    dotnet publish FortiSplit.Work/FortiSplit.Work.csproj -c Release --no-restore -o build/FortiSplit-1.2.6
+    dotnet publish FortiSplit.Work/FortiSplit.Work.csproj -c Release --no-restore -o build/FortiSplit-1.2.7
     dotnet run --project FortiSplit.Work.Checks -c Release
     powershell.exe -NoProfile -File test_work_network.ps1
     python -m unittest test_windows_work

@@ -85,7 +85,7 @@ internal static class NativeAuth
     string category=AuthPolicy.FormCategory(request);
     int attempt=formAttempts.GetValueOrDefault(category)+1;formAttempts[category]=attempt;
     trace?.Invoke("form_"+category);
-    if(attempt>6){stage?.Invoke("form_limit");throw new IOException("Авторизация повторно запрашивает данные входа и не завершается. Попытка остановлена после шести форм одного типа. Диагностика: auth-trace.json; пароль и код в неё не записываются.");}
+    if(attempt>6){stage?.Invoke("form_limit");throw new IOException("VPN повторно запросил данные шесть раз. Попытка остановлена. Сведения о входе сохранены в журнале.");}
     request=request with {Attempt=attempt};
     if(!responseWait.BeginForm())return 1;
     AuthReply reply;
@@ -105,7 +105,7 @@ internal static class NativeAuth
    if(openconnect_set_protocol(info,"fortinet")!=0||openconnect_parse_url(info,config.Server)!=0)throw new IOException("Неверные параметры VPN.");
    stage?.Invoke("contacting_server");
    int result=openconnect_obtain_cookie(info);
-   if(responseWait.Expired){stage?.Invoke("server_timeout");throw new IOException("Сервер VPN не завершил вход за 90 секунд. Попытка остановлена; повторно вводить код в ней не нужно. Для новой попытки нажмите «Подключить». Неверный пароль или код не подтверждён.");}
+   if(responseWait.Expired){stage?.Invoke("server_timeout");throw new IOException("VPN не завершил вход за 90 секунд. Подключитесь снова. Ошибка пароля или кода не подтверждена.");}
    stage?.Invoke(result==0?"cookie_obtained":"authentication_stopped");
    if(result!=0){if(rejectedCertificate)throw new IOException("Сертификат VPN не прошёл проверку. Подключение остановлено.");if(callbackFailure is not null)throw new IOException(callbackFailure.Message,callbackFailure);if(cancelled()||result==1)throw new OperationCanceledException();throw new IOException("Вход в VPN не выполнен, код "+result+".");}
    string cookie=Text(openconnect_get_cookie(info),65536),url=Text(openconnect_get_connect_url(info)),dns=Text(openconnect_get_dnsname(info)),address=Text(openconnect_get_hostname(info));

@@ -1,3 +1,7 @@
+# Windows 1.2.7 Preview
+
+This preview updates the settings layout, application icon and optional update flow. The settings page keeps Save visible and leaves extra room at the bottom when scrolling. The new layout and one-click update require native Windows validation. Existing settings remain local. The executable is unsigned.
+
 # Forti Split 1.2.6 — Windows x64 Preview
 
 Рабочие сайты можно добавлять по имени или полной ссылке: заранее узнавать их IP

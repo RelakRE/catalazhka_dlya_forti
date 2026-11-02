@@ -8,6 +8,6 @@ foreach ($name in $files) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $nam
 foreach ($project in @('FortiSplit.Work','FortiSplit.Work.Checks')) {
  $target=Join-Path $Destination $project
  New-Item -ItemType Directory -Path $target -Force | Out-Null
- foreach ($file in Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot $project) -File | Where-Object Extension -In @('.cs','.csproj','.ps1','.js')) { Copy-Item -LiteralPath $file.FullName -Destination $target }
+ foreach ($file in Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot $project) -File | Where-Object Extension -In @('.cs','.csproj','.ps1','.js','.ico')) { Copy-Item -LiteralPath $file.FullName -Destination $target }
 }
 Write-Output 'Public source exported. Run audit_public.py before publication. No Git operation was performed.'

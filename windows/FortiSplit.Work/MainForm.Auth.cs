@@ -31,7 +31,7 @@ internal sealed partial class MainForm
    while(true){
     AuthRequest request=await AuthPipe.Read<AuthRequest>(server,cancellation.Token);
     if(request.Kind=="authenticated"){
-     if(pendingPassword is not null&&config.RememberPassword){try{PasswordVault.Save(config.Server,config.User,pendingPassword);}catch(Exception){MessageBox.Show("Вход выполнен, но Windows не разрешила сохранить пароль.",Text);}}
+     if(pendingPassword is not null&&config.RememberPassword){try{PasswordVault.Save(config.Server,config.User,pendingPassword);}catch(Exception){MessageBox.Show("Вход выполнен, но сохранить пароль в Windows не удалось.",Text);}}
      await AuthPipe.Write(server,new AuthReply(false,[]),cancellation.Token);break;
     }
     if(request.Kind!="form"||request.Fields.Length>32)throw new IOException("Неверная форма входа.");
@@ -52,7 +52,7 @@ internal sealed partial class MainForm
     }
    }
   }catch(OperationCanceledException){}catch(IOException){}catch(ObjectDisposedException){}
-  catch(Exception){detail.Text="Не удалось обработать вход. Подключитесь повторно после проверки настроек.";stop?.Set();}
+  catch(Exception){detail.Text="Не удалось завершить вход. Проверьте настройки и попробуйте снова.";stop?.Set();}
   finally{pendingPassword=null;server.Dispose();if(ReferenceEquals(authServer,server))authServer=null;if(ReferenceEquals(authStop,cancellation))authStop=null;cancellation.Dispose();}
  }
 }

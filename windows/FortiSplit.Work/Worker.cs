@@ -51,7 +51,7 @@ internal static class Worker
    if(recovery){try{using var previousStop=EventWaitHandle.OpenExisting(StopName(id));previousStop.Set();}catch(WaitHandleCannotBeOpenedException){}}
    try { locked=mutex.WaitOne(recovery?30000:0); } catch(AbandonedMutexException) { locked=true; }
    if(!locked) throw new IOException("Другой сеанс VPN ещё выполняется.");
-   if(recovery) { StopSavedClient(folder);cleaned=Script(folder,"Cleanup").GetAwaiter().GetResult()==0;if(cleaned)File.Delete(Path.Combine(folder,"vpn-process.json")); State(folder,cleaned?"disconnected":"error",cleaned?"Сетевые настройки восстановлены.":"Очистка не подтверждена. Смотрите журнал.",restored:cleaned); return cleaned?0:1; }
+   if(recovery) { StopSavedClient(folder);cleaned=Script(folder,"Cleanup").GetAwaiter().GetResult()==0;if(cleaned)File.Delete(Path.Combine(folder,"vpn-process.json")); State(folder,cleaned?"disconnected":"recovery_required",cleaned?"Сеть восстановлена.":"Не удалось подтвердить восстановление сети.",restored:cleaned); return cleaned?0:1; }
    using var parent=Process.GetProcessById(parentId);
    if(parent.StartTime.ToUniversalTime().Ticks!=parentTicks || !string.Equals(parent.MainModule?.FileName,Environment.ProcessPath,StringComparison.OrdinalIgnoreCase)) throw new IOException("Главное окно недоступно.");
    using var stop=EventWaitHandle.OpenExisting(StopName(id));
@@ -76,7 +76,7 @@ internal static class Worker
     TraceAuth(phase);
     string message=phase switch{
      "form_requested"=>"Введите данные, запрошенные VPN, в окне приложения.",
-     "form_submitted"=>"Ответ формы передан VPN-клиенту. Ожидаем сервер; вход ещё не подтверждён. Может появиться повторный запрос пароля или кода…",
+     "form_submitted"=>"Ожидаем ответ сервера. Он может повторно запросить пароль или код…",
      "cookie_obtained"=>"Сервер VPN подтвердил вход. Подготавливаем туннель…",
      _=>"Ожидаем ответ сервера VPN…"
     };
@@ -101,8 +101,8 @@ internal static class Worker
     var currentNetwork=Storage.Read<System.Text.Json.JsonElement>(Path.Combine(folder,"network.json"));
     generation=currentNetwork.GetProperty("Generation").GetString()!;
     int unresolved=currentNetwork.TryGetProperty("Unresolved",out var names)?names.GetArrayLength():0;
-    string message="VPN подключён. Рабочие адреса настроены; обычный интернет остаётся напрямую.";
-    if(unresolved>0)message+=$" DNS пока не определил имена: {unresolved}. Их можно повторно применить в настройках.";
+    string message="VPN подключён.";
+    if(unresolved>0)message+=$" Не удалось определить адреса: {unresolved}. Повторите попытку в настройках.";
     State(folder,"connected",message,true);return unresolved>0;
    }
    while(!vpn.HasExited && !stop.WaitOne(0) && !consoleStop) {

@@ -22,6 +22,78 @@ Check("ready_only_launch",LaunchGate.CanLaunch(new("connected","ok",true),true))
 Check("no_launch_during_auth",!LaunchGate.CanLaunch(new("authenticating","wait",true),true));
 Check("no_stale_launch",!LaunchGate.CanLaunch(new("connected","ok",true),false));
 Check("no_launch_without_ready",!LaunchGate.CanLaunch(new("connected","wait",false),true));
+Check("action_connect_when_disconnected",ConnectionAction.From(new("disconnected",""),false,false,false)==new ConnectionAction("Подключить",true,false));
+Check("action_stop_during_authentication",ConnectionAction.From(new("authenticating",""),true,false,false)==new ConnectionAction("Отключить",true,true));
+Check("action_stop_when_connected",ConnectionAction.From(new("connected","",true),true,false,false)==new ConnectionAction("Отключить",true,true));
+Check("action_disabled_during_stop",!ConnectionAction.From(new("disconnecting",""),true,true,false).Enabled);
+Check("action_disabled_during_recovery",!ConnectionAction.From(new("disconnecting",""),true,false,true).Enabled);
+Check("action_connect_blocked_until_recovery",!ConnectionAction.From(new("recovery_required",""),false,false,false).Enabled);
+Check("action_connect_after_recovery",ConnectionAction.From(new("disconnected","",false,true),false,false,false).Enabled);
+const string releaseCatalog="""
+[
+ {"tag_name":"v9.0.0","draft":false,"assets":[{"name":"Forti-Split-9.0.0-Windows-x64.zip","state":"uploaded"}]},
+ {"tag_name":"windows-v2.0.0","draft":true,"assets":[{"name":"Forti-Split-2.0.0-Windows-x64.zip","state":"uploaded"}]},
+ {"tag_name":"windows-v1.2.8","draft":false,"prerelease":true,"html_url":"https://evil.example/","assets":[{"name":"Forti-Split-1.2.8-Windows-x64.zip","state":"uploaded","id":44,"size":4,"digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111"}]},
+ {"tag_name":"windows-v1.2.9","draft":false,"assets":[{"name":"Forti-Split-1.2.9-Windows-x64.zip","state":"new"}]},
+ {"tag_name":"windows-v1.2.7","draft":false,"prerelease":true,"assets":[{"name":"Forti-Split-1.2.7-Windows-x64.zip","state":"uploaded"}]},
+ {"tag_name":"windows-v1.2.99/evil","draft":false,"assets":[{"name":"Forti-Split-1.2.99-Windows-x64.zip","state":"uploaded"}]}
+]
+""";
+var update=UpdateCatalog.FindNewer(releaseCatalog,UpdateCatalog.CurrentVersion("1.2.6-ui-preview+abc"));
+Check("updates_choose_newest_published_windows_preview",update?.Version==new Version(1,2,8));
+Check("update_page_is_constructed_from_trusted_repository",update?.PageUrl=="https://github.com/RelakRE/catalazhka_dlya_forti/releases/tag/windows-v1.2.8");
+Check("update_requires_github_digest_and_size",update?.CanInstall==true&&new UpdateCandidate(new Version(1,2,8),"",44,"",4).CanInstall==false);
+Check("same_version_has_no_update",UpdateCatalog.FindNewer(releaseCatalog,new Version(1,2,8)) is null);
+Check("no_releases_has_no_update",UpdateCatalog.FindNewer("[]",new Version(1,2,6)) is null);
+Reject("malformed_release_catalog_rejected",()=>UpdateCatalog.FindNewer("{}",new Version(1,2,6)));
+Reject("invalid_current_version_rejected",()=>UpdateCatalog.CurrentVersion("1.2.6/evil"));
+var updateHandler=new FakeUpdateHandler((request,_)=>Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK){Content=new StringContent(releaseCatalog)}));
+var httpUpdate=await UpdateCheck.FindNewer("1.2.6",CancellationToken.None,updateHandler,TimeSpan.FromSeconds(2));
+Check("update_http_uses_fixed_github_endpoint",updateHandler.Url=="https://api.github.com/repos/RelakRE/catalazhka_dlya_forti/releases?per_page=100"&&httpUpdate?.Version==new Version(1,2,8));
+var stuckHandler=new FakeUpdateHandler(async(_,token)=>{await Task.Delay(Timeout.Infinite,token);return new HttpResponseMessage();});
+try{await UpdateCheck.FindNewer("1.2.6",CancellationToken.None,stuckHandler,TimeSpan.FromMilliseconds(50));Check("update_http_timeout",false);}catch(OperationCanceledException){Check("update_http_timeout",true);}
+var stuckBody=new FakeUpdateHandler((_,_)=>Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK){Content=new StreamContent(new StalledUpdateStream())}));
+try{await UpdateCheck.FindNewer("1.2.6",CancellationToken.None,stuckBody,TimeSpan.FromMilliseconds(50));Check("update_body_read_timeout",false);}catch(OperationCanceledException){Check("update_body_read_timeout",true);}
+var tooLarge=new FakeUpdateHandler((_,_)=>{var content=new StringContent("x");content.Headers.ContentLength=2*1024*1024+1;return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK){Content=content});});
+try{await UpdateCheck.FindNewer("1.2.6",CancellationToken.None,tooLarge,TimeSpan.FromSeconds(2));Check("update_response_limit",false);}catch(IOException){Check("update_response_limit",true);}
+string? realCatalog=Environment.GetEnvironmentVariable("FORTISPLIT_TEST_PUBLIC_RELEASES");
+if(!string.IsNullOrEmpty(realCatalog)){
+ var real=UpdateCatalog.FindNewer(File.ReadAllText(realCatalog),new Version(1,2,5));
+ Check("actual_github_releases_include_windows_126_or_newer",real is not null&&real.Version>=new Version(1,2,6)&&real.CanInstall);
+}
+string updateTemp=Path.Combine(Path.GetTempPath(),"FortiSplitUpdateChecks-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(updateTemp);
+try{
+ byte[] payload=[1,2,3,4];string digest=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(payload)).ToLowerInvariant();
+ var candidate=new UpdateCandidate(new Version(1,2,8),"",44,digest,payload.Length);
+ var downloadHandler=new FakeUpdateHandler((_,_)=>Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK){Content=new ByteArrayContent(payload)}));
+ string download=Path.Combine(updateTemp,"download.zip");await UpdateDownload.Download(candidate,download,CancellationToken.None,downloadHandler);
+ Check("update_download_verifies_hash_and_length",File.ReadAllBytes(download).SequenceEqual(payload));
+ var badHash=new FakeUpdateHandler((_,_)=>Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK){Content=new ByteArrayContent(payload)}));
+ try{await UpdateDownload.Download(candidate with {Sha256=new string('0',64)},Path.Combine(updateTemp,"bad.zip"),CancellationToken.None,badHash);Check("update_rejects_wrong_hash",false);}catch(IOException){Check("update_rejects_wrong_hash",true);}
+ var badRedirect=new FakeUpdateHandler((_,_)=>{var response=new HttpResponseMessage(System.Net.HttpStatusCode.Redirect);response.Headers.Location=new Uri("https://evil.example/file");return Task.FromResult(response);});
+ try{await UpdateDownload.Download(candidate,Path.Combine(updateTemp,"redirect.zip"),CancellationToken.None,badRedirect);Check("update_rejects_foreign_redirect",false);}catch(IOException){Check("update_rejects_foreign_redirect",true);}
+ byte[] pe=new byte[256];pe[0]=0x4d;pe[1]=0x5a;pe[60]=64;pe[64]=0x50;pe[65]=0x45;pe[68]=0x64;pe[69]=0x86;
+ void WriteArchive(string path,string? extra=null,bool marker=true,int attributes=0){using var zip=System.IO.Compression.ZipFile.Open(path,System.IO.Compression.ZipArchiveMode.Create);void Entry(string name,byte[] content,int attr=0){var entry=zip.CreateEntry(name);if(attr!=0)entry.ExternalAttributes=attr;using var s=entry.Open();s.Write(content);};Entry("Forti Split.exe",pe);Entry("Network.ps1",[1]);Entry("network-hook.js",[2]);Entry("licenses/LICENSE.txt",[3]);if(marker)Entry("fortisplit-update-v1.json",System.Text.Encoding.UTF8.GetBytes("{\"format\":1,\"ready_signal\":true}"));if(extra is not null)Entry(extra,[4],attributes);}
+ string archive=Path.Combine(updateTemp,"valid.zip");WriteArchive(archive);string extracted=Path.Combine(updateTemp,"extracted");UpdateArchive.Extract(archive,extracted);
+ Check("update_extracts_supported_package",File.Exists(Path.Combine(extracted,"Forti Split.exe"))&&File.Exists(Path.Combine(extracted,"licenses","LICENSE.txt")));
+ string traversal=Path.Combine(updateTemp,"traversal.zip");WriteArchive(traversal,"../escape.txt");Reject("update_rejects_zip_traversal",()=>UpdateArchive.Extract(traversal,Path.Combine(updateTemp,"traversal")));
+ string duplicate=Path.Combine(updateTemp,"duplicate.zip");WriteArchive(duplicate,"network.PS1");Reject("update_rejects_duplicate_files",()=>UpdateArchive.Extract(duplicate,Path.Combine(updateTemp,"duplicate")));
+ string symlink=Path.Combine(updateTemp,"symlink.zip");WriteArchive(symlink,"licenses/link",attributes:unchecked((int)0xA0000000));Reject("update_rejects_zip_symlinks",()=>UpdateArchive.Extract(symlink,Path.Combine(updateTemp,"symlink")));
+ string old=Path.Combine(updateTemp,"old.zip");WriteArchive(old,marker:false);Reject("update_requires_restart_capability",()=>UpdateArchive.Extract(old,Path.Combine(updateTemp,"old")));
+ string runtime=Path.Combine(updateTemp,"client");Directory.CreateDirectory(runtime);foreach(string name in new[]{"openconnect.exe","libopenconnect-5.dll","libgnutls-30.dll","wintun.dll"})File.WriteAllBytes(Path.Combine(runtime,name),[1]);
+ string runtimeCopy=Path.Combine(updateTemp,"client-copy");UpdateRuntime.Copy(runtime,runtimeCopy);Check("update_preserves_vpn_runtime",File.ReadAllBytes(Path.Combine(runtimeCopy,"wintun.dll")).SequenceEqual(new byte[]{1}));
+ File.WriteAllBytes(Path.Combine(runtime,"wintun.dll"),[]);Reject("update_rejects_empty_runtime",()=>UpdateRuntime.Copy(runtime,Path.Combine(updateTemp,"empty-client")));
+ string? realZip=Environment.GetEnvironmentVariable("FORTISPLIT_TEST_PUBLIC_ZIP");
+ if(!string.IsNullOrEmpty(realZip)){
+  string adapted=Path.Combine(updateTemp,"real-release.zip");
+  using(var original=System.IO.Compression.ZipFile.OpenRead(realZip))using(var future=System.IO.Compression.ZipFile.Open(adapted,System.IO.Compression.ZipArchiveMode.Create)){
+   foreach(var entry in original.Entries){var copy=future.CreateEntry(entry.FullName);copy.ExternalAttributes=entry.ExternalAttributes;using var source=entry.Open();using var target=copy.Open();source.CopyTo(target);}
+   using var marker=future.CreateEntry("fortisplit-update-v1.json").Open();marker.Write(System.Text.Encoding.UTF8.GetBytes("{\"format\":1,\"ready_signal\":true}"));
+  }
+  string actual=Path.Combine(updateTemp,"actual-release");UpdateArchive.Extract(adapted,actual);
+  Check("published_windows_archive_layout_supported",File.Exists(Path.Combine(actual,"Forti Split.exe"))&&File.Exists(Path.Combine(actual,"Network.ps1")));
+ }
+}finally{Directory.Delete(updateTemp,true);}
 Check("config_has_no_auth_secrets",!JsonSerializer.Serialize(new Config()).Contains("\"Password\"",StringComparison.Ordinal));
 string fakeExe=Path.Combine(Path.GetTempPath(),Guid.NewGuid().ToString("N")+".exe");
 try {
@@ -85,3 +157,25 @@ Check("session_rejection_distinguishes_setup_from_disconnect",VpnExitError.Descr
 Check("unknown_exit_does_not_invent_a_cause",VpnExitError.Describe(1,false).Kind=="client_stopped"&&VpnExitError.Describe(1,false).Message.Contains("не определена"));
 Console.WriteLine(JsonSerializer.Serialize(new{Successful=results.Values.All(x=>x),Checks=results}));
 return results.Values.All(x=>x)?0:1;
+
+sealed class FakeUpdateHandler(Func<HttpRequestMessage,CancellationToken,Task<HttpResponseMessage>> answer):HttpMessageHandler
+{
+ public string? Url {get;private set;}
+ protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken cancellationToken){Url=request.RequestUri?.ToString();return answer(request,cancellationToken);}
+}
+
+sealed class StalledUpdateStream:Stream
+{
+ public override bool CanRead=>true;
+ public override bool CanSeek=>false;
+ public override bool CanWrite=>false;
+ public override long Length=>throw new NotSupportedException();
+ public override long Position{get=>throw new NotSupportedException();set=>throw new NotSupportedException();}
+ public override void Flush(){}
+ public override int Read(byte[] buffer,int offset,int count)=>throw new NotSupportedException();
+ public override ValueTask<int> ReadAsync(Memory<byte> buffer,CancellationToken cancellationToken=default)=>new(Wait(cancellationToken));
+ private static async Task<int> Wait(CancellationToken token){await Task.Delay(Timeout.Infinite,token);return 0;}
+ public override long Seek(long offset,SeekOrigin origin)=>throw new NotSupportedException();
+ public override void SetLength(long value)=>throw new NotSupportedException();
+ public override void Write(byte[] buffer,int offset,int count)=>throw new NotSupportedException();
+}

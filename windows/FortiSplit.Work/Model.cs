@@ -92,6 +92,16 @@ public sealed record Config
 }
 
 public sealed record Status(string Stage, string Message, bool Ready = false, bool Restored = false);
+
+public readonly record struct ConnectionAction(string Text, bool Enabled, bool StopsSession)
+{
+ public static ConnectionAction From(Status status, bool active, bool stopRequested, bool recovering)
+ {
+  if (active)
+   return new("Отключить", !stopRequested && !recovering && status.Stage != "disconnecting", true);
+  return new("Подключить", status.Stage != "recovery_required", false);
+ }
+}
 public sealed record WorkAddressRequest(string Id,string[] ExtraHosts,string[] DnsDomains) {
  public Config ApplyTo(Config current){if(!Guid.TryParseExact(Id,"N",out _))throw new ArgumentException("Неверный запрос рабочих адресов.");return current.WithWorkAddresses(ExtraHosts,DnsDomains);}
 }
@@ -101,11 +111,11 @@ public sealed record VpnExitError(string Kind,string Message)
  // OpenConnect 9.21 main.c maps -EPERM (rejected session cookie) to exit 2.
  public static VpnExitError Describe(int code,bool tunnelEstablished) => code==2
   ? new("session_rejected",tunnelEstablished
-   ? "VPN отключён: сервер отклонил текущий сеанс. Вход ранее был выполнен; причина отклонения не указана. Если это повторяется, проверьте вход через FortiClient или обратитесь в ИТ."
-   : "Вход выполнен, но VPN-сервер отклонил выданный сеанс при создании туннеля. Для новой попытки нажмите «Подключить». Если это повторяется, проверьте вход через FortiClient или обратитесь в ИТ.")
+   ? "VPN отключён: сервер отклонил сеанс. Если это повторяется, проверьте вход через FortiClient или обратитесь в ИТ."
+   : "VPN-сервер отклонил сеанс при создании туннеля. Подключитесь снова; если ошибка повторится, проверьте вход через FortiClient или обратитесь в ИТ.")
   : new("client_stopped",tunnelEstablished
-   ? "VPN-соединение прервано. Причина остановки клиента не определена. Технические сведения сохранены в vpn-exit.json."
-   : "Вход выполнен, но VPN-клиент остановился до готовности туннеля. Причина не определена. Нажмите «Подключить» для нового входа; технические сведения сохранены в vpn-exit.json.");
+   ? "VPN отключился. Причина не определена; сведения сохранены в журнале."
+   : "VPN остановился до подключения. Причина не определена; сведения сохранены в журнале. Попробуйте подключиться снова.");
 }
 public sealed class WorkDnsRetries
 {
