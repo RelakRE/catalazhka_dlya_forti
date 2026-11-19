@@ -54,22 +54,33 @@ internal static class NativeAuth
   if(openconnect_init_ssl()!=0){WSACleanup();throw new IOException("Не удалось подготовить TLS.");}
   bool rejectedCertificate=false;Exception? callbackFailure=null;
   // Bound only network waits. The user may take as long as needed to enter MFA.
-  var responseWait=new AuthResponseWait(Environment.TickCount64);int responseFailed=0;
+  var responseWait=new AuthResponseWait(Environment.TickCount64);
+  var forms=new AuthFormHistory();
+  string? httpEvent=null;
+  bool responseFailed=false;
+  IOException Stop(AuthFailure failure)
+  {
+   trace?.Invoke(failure.Kind);
+   return new IOException(failure.Message);
+  }
   Cert cert=(_,_)=>{rejectedCertificate=true;return -1;};
   ProgressCallback progress=(_,_,format,firstArgument)=>{
    try {
-    if(Text(format,128)=="Got HTTP response: %s\n") {
-     string? evt=AuthPolicy.HttpEvent(Text(firstArgument,128));if(evt is not null){Volatile.Write(ref responseFailed,0);trace?.Invoke(evt);}
+    string formatText=Text(format,128);
+    if(formatText=="Got HTTP response: %s\n") {
+     httpEvent=AuthPolicy.HttpEvent(Text(firstArgument,128));
+     if(httpEvent is not null){responseFailed=false;trace?.Invoke(httpEvent);}
     }
-    else if(Text(format,128) is "Error reading HTTP response: %s\n" or "Error reading HTTP response body\n") {Volatile.Write(ref responseFailed,1);trace?.Invoke("response_read_failed");}
+    else if(formatText is "Error reading HTTP response: %s\n" or "Error reading HTTP response body\n") {responseFailed=true;trace?.Invoke("response_read_failed");}
    }catch(Exception){ /* Diagnostics must never unwind a native callback. */ }
   };
-  var formAttempts=new Dictionary<string,int>();
   FormCallback formCallback=(_,pointer)=> {
    try {
     if(cancelled()||responseWait.Expired)return 1;
-    if(Volatile.Read(ref responseFailed)!=0)throw new IOException("Соединение с VPN прервалось при ожидании ответа. Повторная форма не отправлена. Начните новую попытку подключения.");
     var form=Marshal.PtrToStructure<Form>(pointer);var fields=new List<AuthField>();var options=new List<IntPtr>();var seen=new HashSet<IntPtr>();
+    string message=Text(form.Message,2048),error=Text(form.Error,1024);
+    if(AuthPolicy.ServerFailure(httpEvent,error,message,Text(form.Banner,1024)) is { } serverFailure)throw Stop(serverFailure);
+    if(responseFailed)throw Stop(AuthPolicy.ReadFailure);
     for(IntPtr p=form.Options;p!=IntPtr.Zero;) {
      if(!seen.Add(p)||seen.Count>32)throw new IOException("Слишком большая форма входа.");
      var option=Marshal.PtrToStructure<Option>(p);IntPtr current=p;p=option.Next;
@@ -80,12 +91,10 @@ internal static class NativeAuth
      string name=Text(option.Name,256);if(fields.Any(x=>x.Name==name))throw new IOException("Повторное поле входа.");
      fields.Add(new(name,Text(option.Label,512),option.Type,choices.ToArray()));options.Add(current);
     }
-    var request=new AuthRequest("form",Text(form.Message,2048),Text(form.Error,1024),fields.ToArray(),Text(form.Id,256));
+    var request=new AuthRequest("form",message,error,fields.ToArray(),Text(form.Id,256));
     if(fields.Count==0)return 0;
-    string category=AuthPolicy.FormCategory(request);
-    int attempt=formAttempts.GetValueOrDefault(category)+1;formAttempts[category]=attempt;
-    trace?.Invoke("form_"+category);
-    if(attempt>6){stage?.Invoke("form_limit");throw new IOException("VPN повторно запросил данные шесть раз. Попытка остановлена. Сведения о входе сохранены в журнале.");}
+    trace?.Invoke("form_"+AuthPolicy.FormCategory(request));
+    if(forms.Next(request,out int attempt) is { } formFailure)throw Stop(formFailure);
     request=request with {Attempt=attempt};
     if(!responseWait.BeginForm())return 1;
     AuthReply reply;
@@ -93,6 +102,7 @@ internal static class NativeAuth
     finally{responseWait.EndForm(Environment.TickCount64);}
     if(reply.Cancelled||cancelled()||responseWait.Expired)return 1;
     for(int i=0;i<fields.Count;i++){if(!reply.Values.TryGetValue(fields[i].Name,out string? value)||value.Length>4096||value.Contains('\0'))throw new IOException("Неверный ответ формы.");if(openconnect_set_option_value(options[i],value)!=0)throw new IOException("Не удалось заполнить форму.");}
+    httpEvent=null;
     stage?.Invoke("form_submitted");return 0;
    }catch(Exception e){callbackFailure=e;return -1;}
   };
@@ -105,9 +115,17 @@ internal static class NativeAuth
    if(openconnect_set_protocol(info,"fortinet")!=0||openconnect_parse_url(info,config.Server)!=0)throw new IOException("Неверные параметры VPN.");
    stage?.Invoke("contacting_server");
    int result=openconnect_obtain_cookie(info);
-   if(responseWait.Expired){stage?.Invoke("server_timeout");throw new IOException("VPN не завершил вход за 90 секунд. Подключитесь снова. Ошибка пароля или кода не подтверждена.");}
+   if(responseWait.Expired){stage?.Invoke("server_timeout");throw new IOException("VPN не завершил вход за 90 секунд. Проверьте сеть и подключитесь снова.");}
    stage?.Invoke(result==0?"cookie_obtained":"authentication_stopped");
-   if(result!=0){if(rejectedCertificate)throw new IOException("Сертификат VPN не прошёл проверку. Подключение остановлено.");if(callbackFailure is not null)throw new IOException(callbackFailure.Message,callbackFailure);if(cancelled()||result==1)throw new OperationCanceledException();throw new IOException("Вход в VPN не выполнен, код "+result+".");}
+   if(result!=0){
+    if(rejectedCertificate)throw new IOException("Сертификат VPN не прошёл проверку. Подключение остановлено.");
+    if(callbackFailure is not null)throw new IOException(callbackFailure.Message,callbackFailure);
+    if(cancelled()||result==1)throw new OperationCanceledException();
+    if(AuthPolicy.ServerFailure(httpEvent) is { } serverFailure)throw Stop(serverFailure);
+    if(responseFailed)throw Stop(AuthPolicy.ReadFailure);
+    if(httpEvent=="http_401")throw Stop(new("auth_not_authorized","Сервер VPN не подтвердил вход (HTTP 401). "+AuthPolicy.RetryLater));
+    throw new IOException($"VPN не завершил вход (код OpenConnect {result}). Причина неизвестна. "+AuthPolicy.RetryLater);
+   }
    string cookie=Text(openconnect_get_cookie(info),65536),url=Text(openconnect_get_connect_url(info)),dns=Text(openconnect_get_dnsname(info)),address=Text(openconnect_get_hostname(info));
    if(cookie.Length==0||cookie.Contains('\n')||cookie.Contains('\r'))throw new IOException("VPN не выдал сеанс входа.");
    var endpoint=new Uri(url);if(endpoint.Scheme!="https"||!endpoint.Host.Equals(new Uri(config.Server).Host,StringComparison.OrdinalIgnoreCase))throw new IOException("VPN перенаправил вход на другой сервер.");

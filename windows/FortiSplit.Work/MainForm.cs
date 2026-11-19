@@ -165,6 +165,21 @@ internal sealed partial class MainForm : Form
   worker?.Dispose();worker=Process.Start(info)??throw new IOException("Не удалось запустить восстановление сети.");recovering=true;status=new("disconnecting","Восстанавливаем сеть…");launched=true;RefreshUi();
  }
  private void OpenLog(){string path=folder??Storage.Root;var info=new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),"explorer.exe")){UseShellExecute=true};info.ArgumentList.Add(path);Process.Start(info)?.Dispose();}
- private void RefreshUi(){bool active=worker is not null&&!worker.HasExited;if(!active)recovering=false;state.Text=status.Stage switch{"connected"=>"VPN подключён","authenticating"=>"Вход в VPN","configuring"=>"Настраиваем сеть…","reconnecting"=>"Восстанавливаем соединение…","disconnecting"=>"Отключаемся…","recovery_required"=>"Нужно восстановить сеть","error"=>"Нет подключения","preparing"=>"Подключаемся…",_=>"VPN отключён"};detail.Text=status.Stage=="recovery_required"?"Откройте «Настройки» и нажмите «Восстановить сеть».":status.Message;var action=ConnectionAction.From(status,active,stopRequested,recovering);connect.Text=action.Text;connect.Enabled=action.Enabled&&!installingUpdate;restore.Enabled=!active&&!installingUpdate;rdpButton.Enabled=tcButton.Enabled=!stopRequested&&LaunchGate.CanLaunch(status,active);foreach(var option in options)option.Enabled=!active&&!installingUpdate;bool addressesEditable=!installingUpdate&&(!active||(!stopRequested&&LaunchGate.CanLaunch(status,active)&&workRequestId is null));extra.Enabled=dnsDomains.Enabled=applyWorkAddresses.Enabled=addressesEditable;duration.Text=connectedAt.HasValue&&active?"Время подключения: "+(DateTime.UtcNow-connectedAt.Value).ToString(@"hh\:mm\:ss"):"";if(tray is not null)tray.Text="Forti Split — "+(LaunchGate.CanLaunch(status,active)?"подключён":status.Stage=="recovery_required"?"нужно восстановить сеть":"не подключён");}
+ private void RefreshUi(){
+  bool active=worker is not null&&!worker.HasExited;
+  if(!active)recovering=false;
+  state.Text=status.Stage switch{"connected"=>"VPN подключён","authenticating"=>"Вход в VPN","configuring"=>"Настраиваем сеть…","reconnecting"=>"Восстанавливаем соединение…","disconnecting"=>"Отключаемся…","recovery_required"=>"Нужно восстановить сеть","error"=>"Нет подключения","preparing"=>"Подключаемся…",_=>"VPN отключён"};
+  detail.Text=status.Message;
+  if(status.Stage=="recovery_required")
+   detail.Text=(status.Message+" Откройте «Настройки» и нажмите «Восстановить сеть».").TrimStart();
+  var action=ConnectionAction.From(status,active,stopRequested,recovering);
+  connect.Text=action.Text;connect.Enabled=action.Enabled&&!installingUpdate;restore.Enabled=!active&&!installingUpdate;
+  rdpButton.Enabled=tcButton.Enabled=!stopRequested&&LaunchGate.CanLaunch(status,active);
+  foreach(var option in options)option.Enabled=!active&&!installingUpdate;
+  bool addressesEditable=!installingUpdate&&(!active||(!stopRequested&&LaunchGate.CanLaunch(status,active)&&workRequestId is null));
+  extra.Enabled=dnsDomains.Enabled=applyWorkAddresses.Enabled=addressesEditable;
+  duration.Text=connectedAt.HasValue&&active?"Время подключения: "+(DateTime.UtcNow-connectedAt.Value).ToString(@"hh\:mm\:ss"):"";
+  if(tray is not null)tray.Text="Forti Split — "+(LaunchGate.CanLaunch(status,active)?"подключён":status.Stage=="recovery_required"?"нужно восстановить сеть":"не подключён");
+ }
  private void ShowWindow(){Show();WindowState=FormWindowState.Normal;Activate();}
 }

@@ -128,11 +128,13 @@ timestamp. `auth-trace.json` retains up to 160 fixed phase/form-category events 
 numeric HTTP status codes, with timestamps; neither file retains form contents,
 credentials, server response bodies, headers or cookies. HTTP status extraction is
 limited to the known upstream printf literal on Windows x64; other progress output
-is discarded. Repeated login/challenge forms show an attempt counter, do not refill
-the saved password after the first login form, and stop before a seventh form of
-either category. A repeated form alone does not establish invalid credentials.
-Login and confirmation dialogs explain repeated requests separately. A repeated
-login request is not a password-change request; saved passwords are not filled again.
+is discarded. HTTP 429, 403, 405 and 5xx and recognized login-limit notices have
+specific messages. A repeated form with the same ID and input fields ends the
+attempt and suggests waiting about two minutes before reconnecting. This is a
+retry suggestion. The actual lockout duration depends on the gateway configuration.
+Distinct login and MFA steps are still accepted, including HTML MFA delivered with
+HTTP 401. FortiClient can display details when the OpenConnect interface exposes
+only a repeated form or an error code.
 Submitting a form does not confirm login. After an unexpected disconnect with
 pending network changes, restore the network before starting a new connection;
 Connect stays disabled until recovery completes. The app does not promise an

@@ -143,6 +143,22 @@ Check("auth_trace_rejects_non_status_secret",AuthPolicy.HttpEvent("Set-Cookie: S
 Check("auth_trace_rejects_invalid_status",AuthPolicy.HttpEvent("HTTP/1.1 40x secret")==null&&AuthPolicy.HttpEvent("HTTP/1.1 200secret")==null);
 Check("html_answer_form_is_challenge",AuthPolicy.FormCategory(new("form","Answer:","",[fortinetSecret],"unknown"))=="challenge");
 Check("auth_trace_category_never_contains_form_text",AuthPolicy.FormCategory(new("form","private-message","private-error",[fortinetUser,fortinetSecret],"private-form"))=="login");
+var loginForm=new AuthRequest("form","","",[fortinetUser,fortinetSecret],"_login");
+var codeField=new AuthField("code","Code:",2,[]);
+var otpForm=new AuthRequest("form","Enter code","",[codeField],"_challenge");
+var formHistory=new AuthFormHistory();
+Check("login_then_mfa_are_distinct_steps",formHistory.Next(loginForm,out int loginStep)==null&&loginStep==1
+ &&AuthPolicy.ServerFailure("http_401")==null&&formHistory.Next(otpForm,out int otpStep)==null&&otpStep==1);
+Check("repeated_mfa_stops_with_wait_advice",formHistory.Next(otpForm with {Message="Enter a new code"},out _) is {Kind:"auth_form_repeated"} repeatOtp
+ &&repeatOtp.Message.Contains(AuthPolicy.RetryLater)&&repeatOtp.Message.Contains("Причина отказа неизвестна"));
+Check("repeated_login_stops_even_if_fields_reordered",formHistory.Next(loginForm with {Fields=[fortinetSecret,fortinetUser]},out _)?.Kind=="auth_form_repeated");
+Check("a_different_mfa_step_is_allowed",formHistory.Next(otpForm with {Fields=[codeField with {Name="answer"}]},out int newStep)==null&&newStep==2);
+Check("server_reports_too_many_requests",AuthPolicy.ServerFailure(AuthPolicy.HttpEvent("HTTP/1.1 429 Too Many Requests")) is {Kind:"auth_rate_limited"} limit
+ &&limit.Message.Contains("HTTP 429")&&limit.Message.Contains(AuthPolicy.RetryLater));
+Check("fortinet_lockout_uses_fixed_message",AuthPolicy.ServerFailure("http_200",error:"Too many BAD login attempts. Private text.") is {Kind:"auth_login_blocked"} blocked
+ &&blocked.Message.Contains(AuthPolicy.RetryLater)&&!blocked.Message.Contains("Private text"));
+Check("server_errors_have_distinct_causes",AuthPolicy.ServerFailure("http_403")?.Kind=="auth_access_denied"
+ &&AuthPolicy.ServerFailure("http_405")?.Kind=="auth_input_rejected"&&AuthPolicy.ServerFailure("http_503")?.Kind=="auth_server_error");
 var responseWait=new AuthResponseWait(1000);
 Check("auth_waits_90_seconds_for_response",!responseWait.TryExpire(90999));
 Check("auth_user_input_pauses_network_timeout",responseWait.BeginForm()&&!responseWait.TryExpire(500000));
@@ -154,6 +170,8 @@ Check("native_forms_after_timeout_are_not_shown",phantomForms==0&&responseWait.E
 Check("timeout_cancel_command_is_emitted_once",!responseWait.TryExpire(900000));
 Check("openconnect_exit2_is_session_rejection",VpnExitError.Describe(2,false).Kind=="session_rejected");
 Check("session_rejection_distinguishes_setup_from_disconnect",VpnExitError.Describe(2,false).Message.Contains("создании туннеля")&&!VpnExitError.Describe(2,true).Message.Contains("создании туннеля"));
+string tunnelRejection=VpnExitError.Describe(2,false).Message;
+Check("post_login_rejection_offers_retry_without_inferred_lockout",tunnelRejection.Contains("Вход подтверждён")&&tunnelRejection.Contains("Попробуйте подключиться ещё раз")&&!tunnelRejection.Contains("двух минут"));
 Check("unknown_exit_does_not_invent_a_cause",VpnExitError.Describe(1,false).Kind=="client_stopped"&&VpnExitError.Describe(1,false).Message.Contains("не определена"));
 Console.WriteLine(JsonSerializer.Serialize(new{Successful=results.Values.All(x=>x),Checks=results}));
 return results.Values.All(x=>x)?0:1;

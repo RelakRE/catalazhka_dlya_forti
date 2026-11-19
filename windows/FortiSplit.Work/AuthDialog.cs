@@ -10,11 +10,8 @@ internal sealed class AuthDialog : Form
   Text=login?"Вход в VPN — логин и пароль":"Вход в VPN — код подтверждения";ClientSize=new Size(480,240);AutoSize=true;AutoSizeMode=AutoSizeMode.GrowAndShrink;MinimumSize=new Size(480,240);MaximumSize=new Size(700,900);StartPosition=FormStartPosition.CenterParent;MinimizeBox=false;MaximizeBox=false;Font=new Font("Segoe UI",11);
   var layout=new FlowLayoutPanel{AutoSize=true,FlowDirection=FlowDirection.TopDown,WrapContents=false,Padding=new Padding(24),MaximumSize=new Size(620,0)};Controls.Add(layout);
   var description=new Label{Text=request.Error.Length>0?request.Error:request.Message.Length>0?request.Message:"Введите данные для входа в VPN.",AutoSize=true,MaximumSize=new Size(420,220),Margin=new Padding(0,0,0,18)};layout.Controls.Add(description);
-  string guidance=request.Attempt>1
-   ? login?$"VPN снова запрашивает логин и пароль ({request.Attempt} из 6). Введите пароль вручную. Это не запрос на смену пароля; повтор сам по себе не подтверждает ошибку пароля."
-          :$"VPN снова запрашивает код или ответ ({request.Attempt} из 6). Предыдущий ответ не завершил вход; причина может быть неизвестна. Для одноразового кода введите новый."
-   :login?"Введите рабочий логин и пароль. После отправки дождитесь ответа VPN: может потребоваться код подтверждения."
-         :"Введите код или ответ, запрошенный VPN. Дождитесь завершения входа и подключения.";
+  string guidance=login?"Введите рабочий логин и пароль. После отправки дождитесь ответа VPN: может потребоваться код подтверждения."
+                       :"Введите код или ответ, запрошенный VPN. Дождитесь завершения входа и подключения.";
   layout.Controls.Add(new Label{Text=guidance,AutoSize=true,MaximumSize=new Size(420,0),ForeColor=SystemColors.ControlText,Margin=new Padding(0,0,0,12)});
   foreach(var field in request.Fields){layout.Controls.Add(new Label{Text=AuthPolicy.Caption(field,request),AutoSize=true,MaximumSize=new Size(420,80),Margin=new Padding(0,8,0,4)});Control input;
    if(field.Type==3){var combo=new ComboBox{DropDownStyle=ComboBoxStyle.DropDownList,Width=420};combo.DataSource=field.Choices;combo.DisplayMember="Label";combo.ValueMember="Value";input=combo;}

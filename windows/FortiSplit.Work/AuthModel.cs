@@ -5,6 +5,32 @@ public sealed record AuthField(string Name,string Label,int Type,AuthChoice[] Ch
 public sealed record AuthRequest(string Kind,string Message,string Error,AuthField[] Fields,string FormId="",int Attempt=1);
 public sealed record AuthReply(bool Cancelled,Dictionary<string,string> Values);
 
+internal sealed record AuthFailure(string Kind,string Message);
+
+internal sealed class AuthFormHistory
+{
+ private readonly Dictionary<string,int> counts=new();
+ private readonly HashSet<(string Id,string Fields)> requestedForms=new();
+
+ internal AuthFailure? Next(AuthRequest request,out int step)
+ {
+  string category=AuthPolicy.FormCategory(request);
+  step=counts.GetValueOrDefault(category)+1;
+  if(!requestedForms.Add((request.FormId,FieldKey(request))))
+  {
+   string fields=category=="login"?"логин и пароль":"код подтверждения или ответ";
+   return new("auth_form_repeated",$"Сервер VPN повторно запросил {fields}. Причина отказа неизвестна. "+AuthPolicy.RetryLater);
+  }
+  if(step>6)
+   return new("form_limit","VPN запросил слишком много шагов входа. Попытка остановлена.");
+  counts[category]=step;
+  return null;
+ }
+
+ private static string FieldKey(AuthRequest request) => string.Join('\0',request.Fields
+  .OrderBy(field=>field.Name,StringComparer.Ordinal).Select(field=>$"{field.Type}{field.Name}"));
+}
+
 // A timeout terminates the attempt permanently. A subsequent native form
 // callback must not restart its deadline or ask for another MFA response.
 public sealed class AuthResponseWait
@@ -20,6 +46,30 @@ public sealed class AuthResponseWait
 
 public static class AuthPolicy
 {
+ internal const string RetryLater="Подождите около двух минут перед новой попыткой.";
+ internal static readonly AuthFailure ReadFailure=new("auth_response_read_failed",
+  "Соединение прервалось при чтении ответа VPN. Проверьте сеть и подключитесь снова.");
+
+ internal static AuthFailure? ServerFailure(string? httpEvent,string error="",string message="",string banner="")
+ {
+  if(httpEvent=="http_429")
+   return new("auth_rate_limited","Сервер VPN ограничил частоту запросов (HTTP 429). "+RetryLater);
+  if(IsLockout(error)||IsLockout(message)||IsLockout(banner))
+   return new("auth_login_blocked","Сервер VPN временно ограничил вход из-за большого числа попыток. "+RetryLater);
+  if(httpEvent=="http_403")
+   return new("auth_access_denied","Сервер VPN отказал в доступе (HTTP 403). "+RetryLater+" Если отказ повторится, обратитесь в ИТ.");
+  if(httpEvent=="http_405")
+   return new("auth_input_rejected","Сервер VPN отклонил данные входа (HTTP 405). "+RetryLater);
+  if(httpEvent?.StartsWith("http_5",StringComparison.Ordinal)==true)
+   return new("auth_server_error",$"Сбой на стороне VPN-сервера или шлюза (HTTP {httpEvent[5..]}). "+RetryLater);
+  // FortiGate may use HTTP 401 to deliver a valid HTML MFA form.
+  return null;
+ }
+
+ private static bool IsLockout(string text) => new[]{
+  "too many bad login attempts","too many failed login attempts","too many login attempts","слишком много попыток входа"
+ }.Any(phrase=>text.Contains(phrase,StringComparison.OrdinalIgnoreCase));
+
  public static string FormCategory(AuthRequest request) => request.Fields.Any(IsUser)?"login":"challenge";
  // Only fixed event names and numeric HTTP status reach diagnostics. Never retain
  // server text, headers, form values, or the native printf arguments themselves.
