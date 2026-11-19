@@ -12,7 +12,7 @@ and session cookies are never saved in profiles or logs.
 
 ## Download and first launch
 
-Download the Windows preview from [Releases](https://github.com/RelakRE/catalazhka_dlya_forti/releases/tag/windows-v1.2.7).
+Download the Windows preview tagged `windows-v…` from [Releases](https://github.com/RelakRE/catalazhka_dlya_forti/releases).
 Extract the complete archive and run `Forti Split.exe`. .NET is included.
 The first launch downloads and prepares upstream OpenConnect 9.21 and Wintun 0.14.1
 in a progress window, without a console. Internet and a writable app folder are
@@ -41,7 +41,7 @@ not an independent publisher signature. Current preview releases are unsigned.
 Windows x64, .NET SDK 10 and Windows PowerShell 5.1 are required.
 
     dotnet restore FortiSplit.Work/FortiSplit.Work.csproj
-    dotnet publish FortiSplit.Work/FortiSplit.Work.csproj -c Release --no-restore -o build/FortiSplit-1.2.8
+    dotnet publish FortiSplit.Work/FortiSplit.Work.csproj -c Release --no-restore -o build/FortiSplit
     dotnet run --project FortiSplit.Work.Checks -c Release
     powershell.exe -NoProfile -File test_work_network.ps1
     python -m unittest test_windows_work
@@ -130,13 +130,14 @@ timestamp. `auth-trace.json` retains up to 160 fixed phase/form-category events 
 numeric HTTP status codes, with timestamps; neither file retains form contents,
 credentials, server response bodies, headers or cookies. HTTP status extraction is
 limited to the known upstream printf literal on Windows x64; other progress output
-is discarded. HTTP 429, 403, 405 and 5xx and recognized login-limit notices have
-specific messages. A repeated form with the same ID and input fields ends the
-attempt and suggests waiting about two minutes before reconnecting. This is a
-retry suggestion. The actual lockout duration depends on the gateway configuration.
-Distinct login and MFA steps are still accepted, including HTML MFA delivered with
-HTTP 401. FortiClient can display details when the OpenConnect interface exposes
-only a repeated form or an error code.
+is discarded. HTTP 429, terminal 403, 405 and 5xx responses and recognized
+login-limit notices have specific messages. An HTML MFA form with input fields
+can be shown after HTTP 401 or 403. OpenConnect reuses identifiers for HTML and
+tokeninfo challenges, so the app allows these forms within the six-step limit
+per category. Repeated forms with a specific ID and the same input fields end
+the attempt and suggest waiting about two minutes before reconnecting. The actual
+lockout duration depends on the gateway configuration. FortiClient can display
+details when OpenConnect exposes only a repeated form or an error code.
 Submitting a form does not confirm login. After an unexpected disconnect with
 pending network changes, restore the network before starting a new connection;
 Connect stays disabled until recovery completes. The app does not promise an

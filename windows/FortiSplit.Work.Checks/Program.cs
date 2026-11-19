@@ -164,17 +164,26 @@ Check("html_answer_form_is_challenge",AuthPolicy.FormCategory(new("form","Answer
 Check("auth_trace_category_never_contains_form_text",AuthPolicy.FormCategory(new("form","private-message","private-error",[fortinetUser,fortinetSecret],"private-form"))=="login");
 var loginForm=new AuthRequest("form","","",[fortinetUser,fortinetSecret],"_login");
 var codeField=new AuthField("code","Code:",2,[]);
-var otpForm=new AuthRequest("form","Enter code","",[codeField],"_challenge");
+var otpForm=new AuthRequest("form","Enter code","",[codeField],"named_challenge");
+var htmlChallenge=new AuthRequest("form","Enter code","",[fortinetSecret],"unknown");
 var formHistory=new AuthFormHistory();
 Check("login_then_mfa_are_distinct_steps",formHistory.Next(loginForm,out int loginStep)==null&&loginStep==1
- &&AuthPolicy.ServerFailure("http_401")==null&&formHistory.Next(otpForm,out int otpStep)==null&&otpStep==1);
+ &&AuthPolicy.ServerFailure("http_401",htmlChallenge)==null&&formHistory.Next(otpForm,out int otpStep)==null&&otpStep==1);
 Check("repeated_mfa_stops_with_wait_advice",formHistory.Next(otpForm with {Message="Enter a new code"},out _) is {Kind:"auth_form_repeated"} repeatOtp
  &&repeatOtp.Message.Contains(AuthPolicy.RetryLater)&&repeatOtp.Message.Contains("Причина отказа неизвестна"));
 Check("repeated_login_stops_even_if_fields_reordered",formHistory.Next(loginForm with {Fields=[fortinetSecret,fortinetUser]},out _)?.Kind=="auth_form_repeated");
 Check("a_different_mfa_step_is_allowed",formHistory.Next(otpForm with {Fields=[codeField with {Name="answer"}]},out int newStep)==null&&newStep==2);
+var ambiguousForms=new AuthFormHistory();
+Check("html_mfa_allows_same_field_on_next_step",ambiguousForms.Next(htmlChallenge,out int htmlFirst)==null&&htmlFirst==1
+ &&ambiguousForms.Next(htmlChallenge with {Message="Enter another code"},out int htmlSecond)==null&&htmlSecond==2);
+Check("generic_challenge_ids_are_bounded_by_the_same_limit",new[]{"_challenge","_challenge","",""}.All(id=>
+ ambiguousForms.Next(htmlChallenge with {FormId=id},out _)==null)&&ambiguousForms.Next(htmlChallenge,out int seventh)?.Kind=="form_limit"&&seventh==7);
+Check("http_403_allows_an_interactive_html_challenge",AuthPolicy.ServerFailure("http_403",htmlChallenge)==null);
+Check("http_403_with_no_usable_html_challenge_is_terminal",AuthPolicy.ServerFailure("http_403",htmlChallenge with {Fields=[]})?.Kind=="auth_access_denied"
+ &&AuthPolicy.ServerFailure("http_403",loginForm)?.Kind=="auth_access_denied");
 Check("server_reports_too_many_requests",AuthPolicy.ServerFailure(AuthPolicy.HttpEvent("HTTP/1.1 429 Too Many Requests")) is {Kind:"auth_rate_limited"} limit
  &&limit.Message.Contains("HTTP 429")&&limit.Message.Contains(AuthPolicy.RetryLater));
-Check("fortinet_lockout_uses_fixed_message",AuthPolicy.ServerFailure("http_200",error:"Too many BAD login attempts. Private text.") is {Kind:"auth_login_blocked"} blocked
+Check("fortinet_lockout_uses_fixed_message",AuthPolicy.ServerFailure("http_403",htmlChallenge with {Error="Too many BAD login attempts. Private text."}) is {Kind:"auth_login_blocked"} blocked
  &&blocked.Message.Contains(AuthPolicy.RetryLater)&&!blocked.Message.Contains("Private text"));
 Check("server_errors_have_distinct_causes",AuthPolicy.ServerFailure("http_403")?.Kind=="auth_access_denied"
  &&AuthPolicy.ServerFailure("http_405")?.Kind=="auth_input_rejected"&&AuthPolicy.ServerFailure("http_503")?.Kind=="auth_server_error");

@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: windows-release-1.2.6
+  group: windows-release
   cancel-in-progress: false
 jobs:
   release:
@@ -38,9 +38,13 @@ jobs:
           ./test_work_network.ps1
           ./test_work_platform.ps1
       - name: Build archive and verify first-run preparation and native offline tests
-        run: ./build-release.ps1 -SourceCommit '${{ github.sha }}'
+        id: package
+        run: ./build-release.ps1 -SourceCommit $env:GITHUB_SHA
       - name: Publish Windows preview
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.package.outputs.version }}
+          RELEASE_ASSETS: ${{ steps.package.outputs.assets }}
         run: |
-          gh release create windows-v1.2.6 build/release-assets/1.2.6/* --repo '${{ github.repository }}' --target '${{ github.sha }}' --title 'Forti Split 1.2.6 — Windows x64 Preview' --notes-file RELEASE-NOTES.md --prerelease --latest=false
+          $assets = @(Get-ChildItem -LiteralPath $env:RELEASE_ASSETS -File | Select-Object -ExpandProperty FullName)
+          gh release create "windows-v$env:RELEASE_VERSION" @assets --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "Forti Split $env:RELEASE_VERSION — Windows x64 Preview" --notes-file RELEASE-NOTES.md --prerelease --latest=false

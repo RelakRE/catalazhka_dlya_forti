@@ -79,8 +79,6 @@ internal static class NativeAuth
     if(cancelled()||responseWait.Expired)return 1;
     var form=Marshal.PtrToStructure<Form>(pointer);var fields=new List<AuthField>();var options=new List<IntPtr>();var seen=new HashSet<IntPtr>();
     string message=Text(form.Message,2048),error=Text(form.Error,1024);
-    if(AuthPolicy.ServerFailure(httpEvent,error,message,Text(form.Banner,1024)) is { } serverFailure)throw Stop(serverFailure);
-    if(responseFailed)throw Stop(AuthPolicy.ReadFailure);
     for(IntPtr p=form.Options;p!=IntPtr.Zero;) {
      if(!seen.Add(p)||seen.Count>32)throw new IOException("Слишком большая форма входа.");
      var option=Marshal.PtrToStructure<Option>(p);IntPtr current=p;p=option.Next;
@@ -92,6 +90,8 @@ internal static class NativeAuth
      fields.Add(new(name,Text(option.Label,512),option.Type,choices.ToArray()));options.Add(current);
     }
     var request=new AuthRequest("form",message,error,fields.ToArray(),Text(form.Id,256));
+    if(AuthPolicy.ServerFailure(httpEvent,request,Text(form.Banner,1024)) is { } serverFailure)throw Stop(serverFailure);
+    if(responseFailed)throw Stop(AuthPolicy.ReadFailure);
     if(fields.Count==0)return 0;
     trace?.Invoke("form_"+AuthPolicy.FormCategory(request));
     if(forms.Next(request,out int attempt) is { } formFailure)throw Stop(formFailure);

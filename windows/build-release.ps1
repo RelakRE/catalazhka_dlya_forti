@@ -1,17 +1,23 @@
 param([string]$SourceCommit='local')
 $ErrorActionPreference='Stop'
 Set-Location -LiteralPath $PSScriptRoot
-$output=Join-Path $PSScriptRoot 'build\release\Forti-Split-1.2.8-Windows-x64'
-$assets=Join-Path $PSScriptRoot 'build\release-assets\1.2.8'
+$project='FortiSplit.Work/FortiSplit.Work.csproj'
+$projectVersion=dotnet msbuild $project -nologo -getProperty:Version | Select-Object -Last 1
+if($LASTEXITCODE -ne 0 -or $projectVersion -cnotmatch '^[0-9]+\.[0-9]+\.[0-9]+-preview$'){throw 'Expected a Windows preview version in the project'}
+$releaseVersion=$projectVersion.Split('-')[0]
+$packageName="Forti-Split-$releaseVersion-Windows-x64"
+$assetDirectory="build/release-assets/$releaseVersion"
+$output=Join-Path $PSScriptRoot "build/release/$packageName"
+$assets=Join-Path $PSScriptRoot $assetDirectory
 if(Test-Path -LiteralPath $output){throw 'Release output exists; use a clean checkout.'}
 New-Item -ItemType Directory -Path $assets -Force | Out-Null
-dotnet publish FortiSplit.Work/FortiSplit.Work.csproj -c Release -o $output
+dotnet publish $project -c Release -o $output
 if($LASTEXITCODE -ne 0){throw 'Publish failed'}
 Rename-Item -LiteralPath (Join-Path $output 'FortiSplit.exe') -NewName 'Forti Split.exe'
 Copy-Item profile.example.json,SECURITY.md,THIRD-PARTY.md -Destination $output
 [IO.File]::WriteAllText((Join-Path $output 'fortisplit-update-v1.json'),'{"format":1,"ready_signal":true}',[Text.UTF8Encoding]::new($false))
-$instructions=@'
-FORTI SPLIT 1.2.8 — WINDOWS x64 (PREVIEW)
+$instructions=@"
+FORTI SPLIT $releaseVersion — WINDOWS x64 (PREVIEW)
 
 Распакуйте весь архив в отдельную папку и откройте «Forti Split.exe».
 При первом запуске нужен интернет: приложение загрузит официальные VPN-компоненты
@@ -39,7 +45,7 @@ FORTI SPLIT 1.2.8 — WINDOWS x64 (PREVIEW)
 OpenConnect: https://www.infradead.org/openconnect/
 Wintun: https://www.wintun.net/
 7-Zip: https://www.7-zip.org/
-'@
+"@
 [IO.File]::WriteAllText((Join-Path $output 'ПРОЧИТАЙ МЕНЯ.txt'),$instructions,[Text.UTF8Encoding]::new($false))
 $licenses=New-Item -ItemType Directory -Path (Join-Path $output 'licenses')
 $dotnetRoot=Split-Path (Get-Command dotnet).Source
@@ -55,9 +61,9 @@ foreach($pack in @('microsoft.netcore.app.runtime.win-x64','microsoft.windowsdes
 }
 if(@(Get-ChildItem -LiteralPath $licenses -Recurse -File).Count -lt 2){throw 'Missing .NET licenses'}
 $exe=Join-Path $output 'Forti Split.exe'
-$version=(Get-Item -LiteralPath $exe).VersionInfo.ProductVersion
-if($version -notlike '1.2.8*'){throw 'Release version mismatch'}
-$archive=Join-Path $assets 'Forti-Split-1.2.8-Windows-x64.zip'
+$builtVersion=(Get-Item -LiteralPath $exe).VersionInfo.ProductVersion
+if(($builtVersion -split '\+',2)[0] -cne $projectVersion){throw 'Release version mismatch'}
+$archive=Join-Path $assets "$packageName.zip"
 # Archive the clean app before downloading any third-party binaries for tests.
 Compress-Archive -Path (Join-Path $output '*') -DestinationPath $archive -CompressionLevel Optimal
 $prepare=Start-Process -FilePath $exe -ArgumentList '--prepare-runtime' -PassThru -WindowStyle Hidden
@@ -72,7 +78,7 @@ if(!$validation.Successful){throw 'Incomplete self-test evidence'}
 $runtime=& (Join-Path $output 'client\openconnect.exe') --version 2>$null
 if($LASTEXITCODE -ne 0 -or ($runtime -join '') -notmatch 'v9\.21'){throw 'Unexpected OpenConnect version'}
 $validation | Add-Member -NotePropertyName SourceCommit -NotePropertyValue $SourceCommit
-$validation | Add-Member -NotePropertyName Version -NotePropertyValue '1.2.8'
+$validation | Add-Member -NotePropertyName Version -NotePropertyValue $releaseVersion
 $validation | Add-Member -NotePropertyName Runtime -NotePropertyValue 'OpenConnect 9.21; Wintun 0.14.1; upstream downloads verified with SHA256'
 $validation | Add-Member -NotePropertyName RuntimeBundled -NotePropertyValue $false
 $validation | Add-Member -NotePropertyName RealVpnAcceptance -NotePropertyValue 'not_run'
@@ -80,4 +86,7 @@ $validation | Add-Member -NotePropertyName Signed -NotePropertyValue $false
 $validation | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $report -Encoding utf8
 $hashes=Get-ChildItem -LiteralPath $assets -File | Where-Object Name -Ne 'SHA256SUMS.txt' | Sort-Object Name | ForEach-Object {(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()+'  '+$_.Name}
 [IO.File]::WriteAllText((Join-Path $assets 'SHA256SUMS.txt'),($hashes -join "`n")+"`n",[Text.UTF8Encoding]::new($false))
+if($env:GITHUB_OUTPUT){
+ @("version=$releaseVersion","assets=$assetDirectory") | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+}
 Write-Output 'Windows release built and tested without connecting VPN.'

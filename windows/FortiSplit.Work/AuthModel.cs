@@ -16,7 +16,8 @@ internal sealed class AuthFormHistory
  {
   string category=AuthPolicy.FormCategory(request);
   step=counts.GetValueOrDefault(category)+1;
-  if(!requestedForms.Add((request.FormId,FieldKey(request))))
+  // OpenConnect reuses these IDs for HTML and tokeninfo challenges.
+  if(request.FormId is not ("" or "unknown" or "_challenge") && !requestedForms.Add((request.FormId,FieldKey(request))))
   {
    string fields=category=="login"?"логин и пароль":"код подтверждения или ответ";
    return new("auth_form_repeated",$"Сервер VPN повторно запросил {fields}. Причина отказа неизвестна. "+AuthPolicy.RetryLater);
@@ -50,19 +51,19 @@ public static class AuthPolicy
  internal static readonly AuthFailure ReadFailure=new("auth_response_read_failed",
   "Соединение прервалось при чтении ответа VPN. Проверьте сеть и подключитесь снова.");
 
- internal static AuthFailure? ServerFailure(string? httpEvent,string error="",string message="",string banner="")
+ internal static AuthFailure? ServerFailure(string? httpEvent,AuthRequest? form=null,string banner="")
  {
   if(httpEvent=="http_429")
    return new("auth_rate_limited","Сервер VPN ограничил частоту запросов (HTTP 429). "+RetryLater);
-  if(IsLockout(error)||IsLockout(message)||IsLockout(banner))
+  if(IsLockout(form?.Error??"")||IsLockout(form?.Message??"")||IsLockout(banner))
    return new("auth_login_blocked","Сервер VPN временно ограничил вход из-за большого числа попыток. "+RetryLater);
-  if(httpEvent=="http_403")
+  // OpenConnect can parse an HTML challenge from either HTTP 401 or HTTP 403.
+  if(httpEvent=="http_403" && form is not { FormId: "unknown", Fields.Length: >0 })
    return new("auth_access_denied","Сервер VPN отказал в доступе (HTTP 403). "+RetryLater+" Если отказ повторится, обратитесь в ИТ.");
   if(httpEvent=="http_405")
    return new("auth_input_rejected","Сервер VPN отклонил данные входа (HTTP 405). "+RetryLater);
   if(httpEvent?.StartsWith("http_5",StringComparison.Ordinal)==true)
    return new("auth_server_error",$"Сбой на стороне VPN-сервера или шлюза (HTTP {httpEvent[5..]}). "+RetryLater);
-  // FortiGate may use HTTP 401 to deliver a valid HTML MFA form.
   return null;
  }
 
