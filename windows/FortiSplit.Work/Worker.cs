@@ -17,7 +17,7 @@ internal static class Worker
  private sealed record VpnProcess(int Id,long StartTicks,string Image);
  private static readonly Handler handler = signal => { consoleStop=true; return true; };
  internal static string StopName(string id) => @"Local\FortiSplitWork-Stop-"+id;
- private static void State(string folder, string stage,string message,bool ready=false,bool restored=false) => Storage.Save(Path.Combine(folder,"status.json"),new Status(stage,message,ready,restored));
+ private static void State(string folder, string stage,string message,bool ready=false,bool restored=false,TunnelCounters? trafficStart=null) => Storage.Save(Path.Combine(folder,"status.json"),new Status(stage,message,ready,restored,trafficStart));
  internal static async Task<int> Script(string folder,string mode)
  {
   var info=new ProcessStartInfo(Storage.PowerShell) { UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true };
@@ -86,9 +86,11 @@ internal static class Worker
    if(!AllocConsole() || !SetConsoleCtrlHandler(handler,true)) throw new IOException("Не удалось подготовить VPN-процесс.");
    ShowWindow(GetConsoleWindow(),0);
    var info=new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory,"client","openconnect.exe")) { UseShellExecute=false,WorkingDirectory=AppContext.BaseDirectory,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true };
-   foreach(var arg in new[]{"--protocol=fortinet","--interface=FortiSplitWork","--disable-ipv6","--no-proxy","--no-dtls","--force-dpd=60","--reconnect-timeout=60","--non-inter","--cookie-on-stdin","--resolve",login.Resolve,"--script",Path.Combine(folder,"network-hook.js")}) info.ArgumentList.Add(arg);
+   foreach(var arg in new[]{"--protocol=fortinet","--interface="+TunnelTraffic.AdapterName,"--disable-ipv6","--no-proxy","--no-dtls","--force-dpd=60","--reconnect-timeout=60","--non-inter","--cookie-on-stdin","--resolve",login.Resolve,"--script",Path.Combine(folder,"network-hook.js")}) info.ArgumentList.Add(arg);
    if(config.User.Length>0) { info.ArgumentList.Add("--user");info.ArgumentList.Add(config.User); }
    info.ArgumentList.Add(login.ConnectUrl);info.Environment["FORTISPLIT_SESSION"]=folder;
+   // OpenConnect can reuse an existing adapter with counters from a previous session.
+   var existingCounters=TunnelTraffic.Read();
    vpn=Process.Start(info) ?? throw new IOException("OpenConnect не запустился.");
    Storage.Save(Path.Combine(folder,"vpn-process.json"),new VpnProcess(vpn.Id,vpn.StartTime.ToUniversalTime().Ticks,info.FileName));
    vpn.StandardInput.WriteLine(login.Cookie);vpn.StandardInput.Close();login=new("","","");
@@ -96,14 +98,18 @@ internal static class Worker
    State(folder,"preparing","Вход выполнен. Создаём рабочий туннель…");
    string generation="";
    string lastWorkRequest="";
+   TunnelCounters? trafficStart=null;
    var dnsRetries=new WorkDnsRetries();
    bool ShowNetworkReady(){
     var currentNetwork=Storage.Read<System.Text.Json.JsonElement>(Path.Combine(folder,"network.json"));
     generation=currentNetwork.GetProperty("Generation").GetString()!;
+    trafficStart=null;
+    if(currentNetwork.TryGetProperty("Guid",out var guid)&&guid.ValueKind==System.Text.Json.JsonValueKind.String&&Guid.TryParse(guid.GetString(),out var adapterId))
+     trafficStart=existingCounters?.AdapterId==adapterId?existingCounters:new(adapterId,0,0);
     int unresolved=currentNetwork.TryGetProperty("Unresolved",out var names)?names.GetArrayLength():0;
     string message="VPN подключён.";
     if(unresolved>0)message+=$" Не удалось определить адреса: {unresolved}. Повторите попытку в настройках.";
-    State(folder,"connected",message,true);return unresolved>0;
+    State(folder,"connected",message,true,trafficStart:trafficStart);return unresolved>0;
    }
    while(!vpn.HasExited && !stop.WaitOne(0) && !consoleStop) {
     string path=Path.Combine(folder,"network.json");
@@ -126,7 +132,7 @@ internal static class Worker
        try{updated=request.ApplyTo(config);}catch(ArgumentException e){Storage.Save(Path.Combine(folder,"work-address-result.json"),new WorkAddressResult(request.Id,false,e.Message));}
        lastWorkRequest=request.Id;
        if(updated is not null){
-        State(folder,"connected","Обновляем IP рабочих сайтов через DNS VPN…",true);
+        State(folder,"connected","Обновляем IP рабочих сайтов через DNS VPN…",true,trafficStart:trafficStart);
         Storage.Save(Path.Combine(folder,"config.json"),updated);config=updated;
         if(Script(folder,"Resolve").GetAwaiter().GetResult()!=0)throw new IOException("Не удалось обновить рабочие адреса. Смотрите network-error.txt.");
         if(vpn.HasExited||stop.WaitOne(0)||consoleStop)break;

@@ -5,6 +5,8 @@ through the VPN; the normal internet connection keeps its default route.
 
 The UI provides connect/disconnect, RDP and TrueConf launch, tray status, profile
 import/export and recovery. Login, password and second-factor forms appear in the app.
+Starting with 1.2.8, the Work tab shows incoming and outgoing VPN traffic for the
+current session and the transfer rate in each direction, updated about once a second.
 Passwords are saved only when requested, in Windows Credential Manager. OTP values
 and session cookies are never saved in profiles or logs.
 
@@ -39,7 +41,7 @@ not an independent publisher signature. Current preview releases are unsigned.
 Windows x64, .NET SDK 10 and Windows PowerShell 5.1 are required.
 
     dotnet restore FortiSplit.Work/FortiSplit.Work.csproj
-    dotnet publish FortiSplit.Work/FortiSplit.Work.csproj -c Release --no-restore -o build/FortiSplit-1.2.7
+    dotnet publish FortiSplit.Work/FortiSplit.Work.csproj -c Release --no-restore -o build/FortiSplit-1.2.8
     dotnet run --project FortiSplit.Work.Checks -c Release
     powershell.exe -NoProfile -File test_work_network.ps1
     python -m unittest test_windows_work

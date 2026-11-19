@@ -1,3 +1,8 @@
+# Windows 1.2.8 Preview
+
+- На вкладке «Работа» видно, сколько данных получено и отправлено через VPN за сеанс. Скорость в обоих направлениях обновляется примерно раз в секунду.
+- Уточнены сообщения о повторном запросе 2FA, ожидании ответа VPN и ошибках создания туннеля.
+
 # Windows 1.2.7 Preview
 
 This preview updates the settings layout, application icon and optional update flow. The settings page keeps Save visible and leaves extra room at the bottom when scrolling. The new layout and one-click update require native Windows validation. Existing settings remain local. The executable is unsigned.

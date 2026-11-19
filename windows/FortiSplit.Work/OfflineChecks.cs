@@ -13,6 +13,7 @@ internal static class OfflineChecks
    main.Show();Application.DoEvents();
    var work=main.Controls.Find("work",true).OfType<TabPage>().Single();
    var settings=main.Controls.Find("settings",true).OfType<TabPage>().Single();
+   checks["vpn_traffic_hidden_when_disconnected"]=!work.Controls.Find("vpn-traffic",true).OfType<Label>().Single().Visible;
    checks["main_has_one_connection_action"]=work.Controls.Find("connection-action",true).OfType<Button>().Count()==1 && work.Controls.Find("work-content",true).OfType<FlowLayoutPanel>().Single().Controls.OfType<Button>().Count()==1;
    checks["other_actions_on_settings"]=settings.Controls.Find("connection-action",true).Length==0 && settings.Controls.OfType<FlowLayoutPanel>().Any();
    checks["window_width_fixed"]=main.MinimumSize.Width==main.MaximumSize.Width && main.MinimumSize.Width>0 && main.MaximumSize.Height>main.MinimumSize.Height;

@@ -91,7 +91,8 @@ public sealed record Config
  public static readonly JsonSerializerOptions Json = new() { WriteIndented = true, MaxDepth = 16 };
 }
 
-public sealed record Status(string Stage, string Message, bool Ready = false, bool Restored = false);
+public sealed record TunnelCounters(Guid AdapterId, long Received, long Sent);
+public sealed record Status(string Stage, string Message, bool Ready = false, bool Restored = false, TunnelCounters? TrafficStart = null);
 
 public readonly record struct ConnectionAction(string Text, bool Enabled, bool StopsSession)
 {

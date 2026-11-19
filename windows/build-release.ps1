@@ -1,8 +1,8 @@
 param([string]$SourceCommit='local')
 $ErrorActionPreference='Stop'
 Set-Location -LiteralPath $PSScriptRoot
-$output=Join-Path $PSScriptRoot 'build\release\Forti-Split-1.2.7-Windows-x64'
-$assets=Join-Path $PSScriptRoot 'build\release-assets\1.2.7'
+$output=Join-Path $PSScriptRoot 'build\release\Forti-Split-1.2.8-Windows-x64'
+$assets=Join-Path $PSScriptRoot 'build\release-assets\1.2.8'
 if(Test-Path -LiteralPath $output){throw 'Release output exists; use a clean checkout.'}
 New-Item -ItemType Directory -Path $assets -Force | Out-Null
 dotnet publish FortiSplit.Work/FortiSplit.Work.csproj -c Release -o $output
@@ -11,7 +11,7 @@ Rename-Item -LiteralPath (Join-Path $output 'FortiSplit.exe') -NewName 'Forti Sp
 Copy-Item profile.example.json,SECURITY.md,THIRD-PARTY.md -Destination $output
 [IO.File]::WriteAllText((Join-Path $output 'fortisplit-update-v1.json'),'{"format":1,"ready_signal":true}',[Text.UTF8Encoding]::new($false))
 $instructions=@'
-FORTI SPLIT 1.2.7 — WINDOWS x64 (PREVIEW)
+FORTI SPLIT 1.2.8 — WINDOWS x64 (PREVIEW)
 
 Распакуйте весь архив в отдельную папку и откройте «Forti Split.exe».
 При первом запуске нужен интернет: приложение загрузит официальные VPN-компоненты
@@ -44,8 +44,10 @@ Wintun: https://www.wintun.net/
 $licenses=New-Item -ItemType Directory -Path (Join-Path $output 'licenses')
 $dotnetRoot=Split-Path (Get-Command dotnet).Source
 Get-ChildItem -LiteralPath $dotnetRoot -File | Where-Object Name -Match '(?i)license|notice' | Copy-Item -Destination $licenses
+$packagesRoot=$env:NUGET_PACKAGES
+if(!$packagesRoot){$packagesRoot=Join-Path $env:USERPROFILE '.nuget/packages'}
 foreach($pack in @('microsoft.netcore.app.runtime.win-x64','microsoft.windowsdesktop.app.runtime.win-x64')){
- $packRoot=Join-Path $env:USERPROFILE ".nuget/packages/$pack"
+ $packRoot=Join-Path $packagesRoot $pack
  if(Test-Path -LiteralPath $packRoot){
   $target=New-Item -ItemType Directory -Path (Join-Path $licenses $pack)
   Get-ChildItem -LiteralPath $packRoot -Recurse -File | Where-Object Name -Match '(?i)license|notice' | ForEach-Object {Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $target ($_.Directory.Name+'-'+$_.Name))}
@@ -54,8 +56,8 @@ foreach($pack in @('microsoft.netcore.app.runtime.win-x64','microsoft.windowsdes
 if(@(Get-ChildItem -LiteralPath $licenses -Recurse -File).Count -lt 2){throw 'Missing .NET licenses'}
 $exe=Join-Path $output 'Forti Split.exe'
 $version=(Get-Item -LiteralPath $exe).VersionInfo.ProductVersion
-if($version -notlike '1.2.7*'){throw 'Release version mismatch'}
-$archive=Join-Path $assets 'Forti-Split-1.2.7-Windows-x64.zip'
+if($version -notlike '1.2.8*'){throw 'Release version mismatch'}
+$archive=Join-Path $assets 'Forti-Split-1.2.8-Windows-x64.zip'
 # Archive the clean app before downloading any third-party binaries for tests.
 Compress-Archive -Path (Join-Path $output '*') -DestinationPath $archive -CompressionLevel Optimal
 $prepare=Start-Process -FilePath $exe -ArgumentList '--prepare-runtime' -PassThru -WindowStyle Hidden
@@ -70,7 +72,7 @@ if(!$validation.Successful){throw 'Incomplete self-test evidence'}
 $runtime=& (Join-Path $output 'client\openconnect.exe') --version 2>$null
 if($LASTEXITCODE -ne 0 -or ($runtime -join '') -notmatch 'v9\.21'){throw 'Unexpected OpenConnect version'}
 $validation | Add-Member -NotePropertyName SourceCommit -NotePropertyValue $SourceCommit
-$validation | Add-Member -NotePropertyName Version -NotePropertyValue '1.2.7'
+$validation | Add-Member -NotePropertyName Version -NotePropertyValue '1.2.8'
 $validation | Add-Member -NotePropertyName Runtime -NotePropertyValue 'OpenConnect 9.21; Wintun 0.14.1; upstream downloads verified with SHA256'
 $validation | Add-Member -NotePropertyName RuntimeBundled -NotePropertyValue $false
 $validation | Add-Member -NotePropertyName RealVpnAcceptance -NotePropertyValue 'not_run'

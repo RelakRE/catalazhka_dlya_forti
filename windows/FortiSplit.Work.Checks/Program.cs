@@ -1,4 +1,5 @@
 using FortiSplit.Work;
+using System.Diagnostics;
 using System.Text.Json;
 var results=new Dictionary<string,bool>();
 void Check(string name,bool condition)=>results.Add(name,condition);
@@ -29,6 +30,24 @@ Check("action_disabled_during_stop",!ConnectionAction.From(new("disconnecting","
 Check("action_disabled_during_recovery",!ConnectionAction.From(new("disconnecting",""),true,false,true).Enabled);
 Check("action_connect_blocked_until_recovery",!ConnectionAction.From(new("recovery_required",""),false,false,false).Enabled);
 Check("action_connect_after_recovery",ConnectionAction.From(new("disconnected","",false,true),false,false,false).Enabled);
+var traffic = new SessionTraffic();
+var baseline = new TunnelCounters(Guid.NewGuid(), 1000, 600);
+long second = Stopwatch.Frequency;
+Check("traffic_excludes_pre_session_bytes", traffic.Measure(baseline, baseline with { Received = 1100, Sent = 650 }, 0)
+    == new TrafficSample(100, 50, null, null));
+var busy = baseline with { Received = 1500, Sent = 850 };
+Check("traffic_rates_use_elapsed_time", traffic.Measure(baseline, busy, 2 * second)
+    == new TrafficSample(500, 250, 200, 100));
+Check("traffic_idle_has_zero_rates", traffic.Measure(baseline, busy, 3 * second)
+    == new TrafficSample(500, 250, 0, 0));
+traffic.Pause();
+Check("traffic_resume_preserves_totals_without_stale_rates", traffic.Measure(baseline, busy with { Received = 1700 }, 4 * second)
+    == new TrafficSample(700, 250, null, null));
+Check("traffic_counter_reset_preserves_other_direction", traffic.Measure(baseline, busy with { Received = 30, Sent = 950 }, 5 * second)
+    == new TrafficSample(730, 350, null, 100));
+var recreatedAdapter = new TunnelCounters(Guid.NewGuid(), 0, 0);
+Check("traffic_reconnect_with_new_adapter_keeps_session_total", traffic.Measure(recreatedAdapter, recreatedAdapter with { Received = 50, Sent = 20 }, 6 * second)
+    == new TrafficSample(780, 370, null, null));
 const string releaseCatalog="""
 [
  {"tag_name":"v9.0.0","draft":false,"assets":[{"name":"Forti-Split-9.0.0-Windows-x64.zip","state":"uploaded"}]},

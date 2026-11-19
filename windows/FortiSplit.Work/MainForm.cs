@@ -57,7 +57,7 @@ internal sealed partial class MainForm : Form
   this.preview=preview; try{Icon=System.Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath!);}catch(Exception){} Text="Forti Split · "+Application.ProductVersion.Split('+')[0]; Font=new Font("Segoe UI",11); AutoScaleMode=AutoScaleMode.Font; MinimumSize=new Size(620,480); MaximumSize=new Size(620,10000); Size=new Size(620,720); MaximizeBox=false;
   var work=new TabPage("Работа"){Name="work"}; var settings=new TabPage("Настройки"){Name="settings"}; tabs.TabPages.AddRange([work,settings]); Controls.Add(tabs);
   var main=Column();main.Name="work-content";work.Controls.Add(main);
-  main.Controls.AddRange([state,detail,duration,connect,updateBanner]);ConstrainText(main,state);ConstrainText(main,detail);ConstrainText(main,updateBanner);connect.Margin=new Padding(0,12,0,6);FillWidth(main,connect);
+  main.Controls.AddRange([state,detail,duration,trafficLabel,connect,updateBanner]);ConstrainText(main,state);ConstrainText(main,detail);ConstrainText(main,trafficLabel);ConstrainText(main,updateBanner);connect.Margin=new Padding(0,12,0,6);FillWidth(main,connect);
   var config=Column();config.Name="settings-content";settings.Controls.Add(config);
   var footer=new Panel{Name="settings-footer",Dock=DockStyle.Bottom,Height=98,Padding=new Padding(20,4,20,12)};settings.Controls.Add(footer);footer.SendToBack();
   void AlignFooter(){int right=20+Math.Max(0,footer.ClientSize.Width-config.ClientSize.Width);if(footer.Padding.Right!=right)footer.Padding=new Padding(20,4,right,12);}
@@ -128,6 +128,7 @@ internal sealed partial class MainForm : Form
   foreach(var arg in new[]{"--worker",id,self.Id.ToString(),self.StartTime.ToUniversalTime().Ticks.ToString()})info.ArgumentList.Add(arg);
   worker?.Dispose();try{worker=Process.Start(info)??throw new IOException("Клиент не запущен.");}catch{CancelAuth();throw;}
   _=ServeAuth(worker.Id,c);
+  trafficSession=null;
   workRequestId=null;launched=false;stopRequested=false;recovering=false;closing=false;connectedAt=null;status=new("preparing","Подключаем VPN…");RefreshUi();
  }
  private void RequestStop(){if(worker is null || worker.HasExited)return;stopRequested=true;CancelAuth();stop?.Set();status=new("disconnecting","Ожидаем отключения и очистки сети…");RefreshUi();}
@@ -179,6 +180,7 @@ internal sealed partial class MainForm : Form
   bool addressesEditable=!installingUpdate&&(!active||(!stopRequested&&LaunchGate.CanLaunch(status,active)&&workRequestId is null));
   extra.Enabled=dnsDomains.Enabled=applyWorkAddresses.Enabled=addressesEditable;
   duration.Text=connectedAt.HasValue&&active?"Время подключения: "+(DateTime.UtcNow-connectedAt.Value).ToString(@"hh\:mm\:ss"):"";
+  RefreshTraffic(active);
   if(tray is not null)tray.Text="Forti Split — "+(LaunchGate.CanLaunch(status,active)?"подключён":status.Stage=="recovery_required"?"нужно восстановить сеть":"не подключён");
  }
  private void ShowWindow(){Show();WindowState=FormWindowState.Normal;Activate();}
