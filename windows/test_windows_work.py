@@ -1,10 +1,19 @@
 from pathlib import Path
 import unittest
+from release_notes import release_notes
 
 ROOT = Path(__file__).resolve().parent
 SRC = ROOT / 'FortiSplit.Work'
 
 class WorkSafety(unittest.TestCase):
+    def test_release_card_contains_only_the_requested_version(self):
+        history = "# Windows 1.2.10 Preview\r\n\r\n- Новый выпуск\r\n\r\n# Windows 1.2.1 Preview\r\n\r\n## Changes\r\nDetails\r\n"
+        self.assertEqual(release_notes(history, "1.2.10"), "- Новый выпуск")
+        self.assertEqual(release_notes(history, "1.2.1"), "## Changes\r\nDetails")
+        for invalid in ("", "# Windows 1.2.10 Preview\n", history + history):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                release_notes(invalid, "1.2.10")
+
     def test_network_writes_only_tunnel_host_routes(self):
         code = (SRC / 'Network.ps1').read_text(encoding='utf-8-sig')
         self.assertIn("$prefix=$IP+'/32'", code)
