@@ -18,6 +18,13 @@ config.PrepareRdp("full address:s:WORKSTATION-17\ngatewayusagemethod:i:3");Check
 config.PrepareRdp("full address:s:another-pc.example.com\ngatewayhostname:s:gateway.example.com\ngatewayusagemethod:i:2\ngatewayprofileusagemethod:i:0");Check("any_target_and_system_gateway_profile_allowed",config.OptionalHosts.Contains("another-pc.example.com"));
 config.PrepareRdp("full address:s:foo & calc.exe");Check("unrecognized_endpoint_never_used_as_command_or_route",config.OptionalHosts.Length==0);
 config.PrepareRdp("");Check("vpn_without_rdp_target_allowed",config.Hosts.Length==0&&config.OptionalHosts.Length==0);
+var sharedRdp=config with {ExtraHosts=["desktop.example.com"]};
+sharedRdp.PrepareRdp("full address:s:desktop.example.com");
+var afterSiteRemoval=sharedRdp.WithWorkAddresses([],[]);
+Check("removing_site_preserves_rdp_destination",afterSiteRemoval.Hosts.Length==0&&afterSiteRemoval.OptionalHosts.Contains("desktop.example.com"));
+Check("ipv6_gateway_keeps_authenticated_peer",Config.GatewayResolve("vpn.example.com","[2001:db8::1]")=="vpn.example.com:2001:db8::1");
+Check("ipv4_gateway_keeps_authenticated_peer",Config.GatewayResolve("vpn.example.com","192.0.2.6")=="vpn.example.com:192.0.2.6");
+Reject("invalid_gateway_peer_rejected",()=>Config.GatewayResolve("vpn.example.com","bad-peer"));
 foreach(string url in new[]{"http://vpn.example","https://a:b@vpn.example","https://vpn.example/?secret=1","https://vpn.example/#x"})Reject("server_"+url,()=>new Config{Server=url,AutoRdp=false}.Validate());
 Check("ready_only_launch",LaunchGate.CanLaunch(new("connected","ok",true),true));
 Check("no_launch_during_auth",!LaunchGate.CanLaunch(new("authenticating","wait",true),true));
@@ -174,6 +181,12 @@ Check("repeated_mfa_stops_with_wait_advice",formHistory.Next(otpForm with {Messa
 Check("repeated_login_stops_even_if_fields_reordered",formHistory.Next(loginForm with {Fields=[fortinetSecret,fortinetUser]},out _)?.Kind=="auth_form_repeated");
 Check("a_different_mfa_step_is_allowed",formHistory.Next(otpForm with {Fields=[codeField with {Name="answer"}]},out int newStep)==null&&newStep==2);
 var ambiguousForms=new AuthFormHistory();
+var htmlLogin=loginForm with {FormId="unknown"};
+var loginHistory=new AuthFormHistory();
+Check("http_403_return_to_html_login_is_terminal",AuthPolicy.ServerFailure("http_403",htmlLogin)?.Kind=="auth_access_denied");
+Check("http_403_custom_username_and_password_are_terminal",AuthPolicy.ServerFailure("http_403",htmlLogin with {
+ Fields=[fortinetUser with {Name="email"},passwordField]})?.Kind=="auth_access_denied");
+Check("repeated_generic_login_is_terminal",loginHistory.Next(htmlLogin,out _)==null && loginHistory.Next(htmlLogin,out _)?.Kind=="auth_form_repeated");
 Check("html_mfa_allows_same_field_on_next_step",ambiguousForms.Next(htmlChallenge,out int htmlFirst)==null&&htmlFirst==1
  &&ambiguousForms.Next(htmlChallenge with {Message="Enter another code"},out int htmlSecond)==null&&htmlSecond==2);
 Check("generic_challenge_ids_are_bounded_by_the_same_limit",new[]{"_challenge","_challenge","",""}.All(id=>

@@ -6,13 +6,24 @@ $root=Join-Path $env:LOCALAPPDATA 'Forti Split Work\sessions'
 if ([IO.Path]::GetDirectoryName($Session) -ne $root -or [IO.Path]::GetFileName($Session) -notmatch '^[a-f0-9]{32}$') { throw 'Invalid session path' }
 for ($part=Get-Item -LiteralPath $Session; $null -ne $part; $part=$part.Parent) { if ($part.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse path refused' } }
 $statePath=Join-Path $Session 'network.json'
+$sessionId=[IO.Path]::GetFileName($Session)
+$journalDirectory=Join-Path (Split-Path -Parent $PSScriptRoot) 'state'
+$journalPath=Join-Path $journalDirectory (([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)+'-'+$sessionId+'.json')
 $tag='FortiSplitWork-'+[IO.Path]::GetFileName($Session)
 $mutex=New-Object Threading.Mutex($false,'Global\FortiSplitWork-Network')
 $locked=$false
 function Save-State {
+ # The privileged journal is authoritative. The UI reads a copy in its session.
+ $json=$script:state | ConvertTo-Json -Depth 8
+ $json | Set-Content -LiteralPath ($journalPath+'.tmp') -Encoding UTF8
+ if ([IO.File]::Exists($journalPath)) {
+  [IO.File]::Replace($journalPath+'.tmp',$journalPath,[NullString]::Value)
+ } else {
+  [IO.File]::Move($journalPath+'.tmp',$journalPath)
+ }
  $tmp=$statePath+'.tmp'
  foreach ($p in @($statePath,$tmp)) { if ((Test-Path -LiteralPath $p) -and ((Get-Item -LiteralPath $p).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'State link refused' } }
- $script:state | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $tmp -Encoding UTF8
+ $json | Set-Content -LiteralPath $tmp -Encoding UTF8
  Move-Item -LiteralPath $tmp -Destination $statePath -Force
 }
 function Assert-IP([string]$IP) {
@@ -24,31 +35,42 @@ function Assert-Host([string]$HostName) {
  if ($HostName.Length -gt 253 -or $HostName -notmatch '^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$') { throw 'Invalid work host' }
  foreach ($label in $HostName.Split('.')) { if ($label.Length -gt 63 -or $label.StartsWith('-') -or $label.EndsWith('-')) { throw 'Invalid label' } }
 }
-function Read-State {
- if (-not (Test-Path -LiteralPath $statePath)) { return $null }
- if ((Get-Item -LiteralPath $statePath).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'State link refused' }
- $s=Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+function Read-State([switch]$AllowLegacy) {
+ $source=$journalPath
+ if ($AllowLegacy -and !(Test-Path -LiteralPath $source)) { $source=$statePath }
+ if (-not (Test-Path -LiteralPath $source)) { return $null }
+ if ((Get-Item -LiteralPath $source).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'State link refused' }
+ $s=Get-Content -LiteralPath $source -Raw | ConvertFrom-Json
  if ($s.Tag -ne $tag -or $s.Index -le 0 -or $s.Routes.Count -gt 256) { throw 'Invalid recovery state' }
  Assert-IP $s.Address
  foreach ($prefix in $s.Routes) { if (-not $prefix.EndsWith('/32')) { throw 'Non-host recovery route' }; Assert-IP $prefix.Substring(0,$prefix.Length-3) }
  return $s
 }
 function Cleanup {
- $s=Read-State
+ $s=Read-State -AllowLegacy
  foreach ($rule in @(Get-DnsClientNrptRule | Where-Object Comment -eq $tag)) { Remove-DnsClientNrptRule -Name $rule.Name -Force }
  if ($null -eq $s) { return }
- $adapter=@(Get-NetAdapter -IncludeHidden | Where-Object { $_.ifIndex -eq $s.Index -and [string]$_.InterfaceGuid -eq $s.Guid -and $_.Name -eq 'FortiSplitWork' })
+ $adapter=@(Get-NetAdapter -IncludeHidden | Where-Object { [string]$_.InterfaceGuid -eq $s.Guid })
+ if ($adapter.Count -gt 1) { throw 'Ambiguous tunnel identity' }
+ $index=$s.Index
  if ($adapter.Count -eq 1) {
-  foreach ($prefix in $s.Routes) {
-   foreach ($route in @(Get-NetRoute -AddressFamily IPv4 -PolicyStore ActiveStore | Where-Object { $_.InterfaceIndex -eq $s.Index -and $_.DestinationPrefix -eq $prefix -and $_.NextHop -eq $s.Address -and $_.RouteMetric -eq 1 })) { $route | Remove-NetRoute -Confirm:$false }
+  if (!(Test-Path -LiteralPath $journalPath) -and $adapter[0].Name -ne 'FortiSplitWork') {
+   throw 'Legacy recovery journal: restore the original tunnel adapter name before cleanup'
   }
-  if ($s.AddedAddress) { foreach ($ip in @(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceIndex -eq $s.Index -and $_.IPAddress -eq $s.Address })) { $ip | Remove-NetIPAddress -Confirm:$false } }
-  if ($s.OriginalMtu -gt 0) { Set-NetIPInterface -InterfaceIndex $s.Index -AddressFamily IPv4 -NlMtuBytes $s.OriginalMtu -PolicyStore ActiveStore }
-  if (@(Get-NetRoute -AddressFamily IPv4 -PolicyStore ActiveStore | Where-Object { $_.InterfaceIndex -eq $s.Index -and $s.Routes -contains $_.DestinationPrefix -and $_.NextHop -eq $s.Address -and $_.RouteMetric -eq 1 }).Count) { throw 'Route cleanup not confirmed' }
-  if ($s.AddedAddress -and @(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceIndex -eq $s.Index -and $_.IPAddress -eq $s.Address }).Count) { throw 'IP cleanup not confirmed' }
+  $index=$adapter[0].ifIndex
+  foreach ($prefix in $s.Routes) {
+   foreach ($route in @(Get-NetRoute -AddressFamily IPv4 -PolicyStore ActiveStore | Where-Object { $_.InterfaceIndex -eq $index -and $_.DestinationPrefix -eq $prefix -and $_.NextHop -eq $s.Address -and $_.RouteMetric -eq 1 })) { $route | Remove-NetRoute -Confirm:$false }
+  }
+  if ($s.AddedAddress) { foreach ($ip in @(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceIndex -eq $index -and $_.IPAddress -eq $s.Address })) { $ip | Remove-NetIPAddress -Confirm:$false } }
+  if ($s.OriginalMtu -gt 0) { Set-NetIPInterface -InterfaceIndex $index -AddressFamily IPv4 -NlMtuBytes $s.OriginalMtu -PolicyStore ActiveStore }
  }
+ $indices=@($s.Index,$index)
+ if (@(Get-NetRoute -AddressFamily IPv4 -PolicyStore ActiveStore | Where-Object { $indices -contains $_.InterfaceIndex -and $s.Routes -contains $_.DestinationPrefix -and $_.NextHop -eq $s.Address -and $_.RouteMetric -eq 1 }).Count) { throw 'Route cleanup not confirmed' }
+ if ($s.AddedAddress -and @(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $indices -contains $_.InterfaceIndex -and $_.IPAddress -eq $s.Address }).Count) { throw 'IP cleanup not confirmed' }
  if (@(Get-DnsClientNrptRule | Where-Object Comment -eq $tag).Count) { throw 'DNS cleanup not confirmed' }
- Remove-Item -LiteralPath $statePath
+ foreach ($path in @($statePath,$journalPath)) {
+  if(Test-Path -LiteralPath $path){Remove-Item -LiteralPath $path}
+ }
 }
 function Add-Route([string]$IP) {
  Assert-IP $IP; $prefix=$IP+'/32'
@@ -131,10 +153,6 @@ try {
      } catch { $dnsFailures+=@([pscustomobject]@{Host=$name;Server=$server;Transport=$(if($tcp){'TCP'}else{'UDP'});ErrorType=$_.Exception.GetType().Name}) }
     }
     if ($addresses.Count) { break }
-   }
-   if (-not $addresses.Count -and [DateTime]::UtcNow -lt $lookupDeadline) {
-    try { $addresses=@(Resolve-DnsName -Name $name -Type A -QuickTimeout -ErrorAction Stop | Where-Object { $_.PSObject.Properties['IPAddress'] -and $_.Type -eq 1 } | Select-Object -ExpandProperty IPAddress -Unique) }
-    catch { }
    }
   }
   if (-not $addresses.Count -or $addresses.Count -gt 16) {

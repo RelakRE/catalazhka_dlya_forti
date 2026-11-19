@@ -59,6 +59,16 @@ public sealed record Config
   if (b[0] is 0 or 127 or >= 224 || (b[0] == 169 && b[1] == 254)) throw new ArgumentException("Недопустимый рабочий IP.");
   return true;
  }
+ internal static string GatewayResolve(string dns,string address)
+ {
+  Host(dns);
+  // OpenConnect returns the authenticated IPv6 peer in brackets. Its CLI
+  // splits --resolve at the first colon and expects the bare address after it.
+  if(address.StartsWith('[') && address.EndsWith(']')) address=address[1..^1];
+  if(!IPAddress.TryParse(address,out var peer))throw new ArgumentException("Неверный адрес VPN-шлюза.");
+  if(peer.AddressFamily==AddressFamily.InterNetwork)IPv4(address);
+  return dns+":"+peer;
+ }
  public static void Host(string value)
  {
   if (value.Length is < 1 or > 253 || value != value.Trim() || value.Any(char.IsControl)) throw new ArgumentException("Неверное имя сервера.");
@@ -85,7 +95,7 @@ public sealed record Config
   if(Get("gatewayusagemethod") is not ("0" or "4"))Hint(Get("gatewayhostname"));
   Hosts=ExtraHosts.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
   OptionalHosts=hints.Concat(TrueConf.Length>0?new[]{TrueConfHost,TrueConfFallback}.Where(x=>x.Length>0):[])
-   .Except(Hosts,StringComparer.OrdinalIgnoreCase).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+   .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
   Validate();
  }
  public static readonly JsonSerializerOptions Json = new() { WriteIndented = true, MaxDepth = 16 };

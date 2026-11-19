@@ -5,6 +5,7 @@ $testRoot=Join-Path $PSScriptRoot ('build\network-check-'+[guid]::NewGuid().ToSt
 $env:LOCALAPPDATA=$testRoot
 $session=Join-Path $testRoot ('Forti Split Work\sessions\'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $session -Force | Out-Null
+$journalDirectory=New-Item -ItemType Directory -Path (Join-Path $testRoot 'state')
 $global:fortiTestroutes=@();$global:fortiTestrules=@();$global:fortiTestips=@();$global:fortiTestfailResolve=$false;$global:fortiTestfailRemove=$false;$global:fortiTestMissingNames=@()
 $global:fortiTestadapter=[pscustomobject]@{ifIndex=77;InterfaceIndex=77;InterfaceGuid='test-guid';Name='FortiSplitWork';Status='Up';InterfaceDescription='Wintun'}
 $global:fortiTestDnsCalls=0;$global:fortiTestCacheClears=0
@@ -23,12 +24,14 @@ function global:Get-DnsClientNrptRule { $global:fortiTestrules }
 function global:Get-DnsClientNrptPolicy { param([switch]$Effective);throw 'Runtime effective-policy diagnostics must not run' }
 function global:Add-DnsClientNrptRule { param($Namespace,$NameServers,$Comment,$DisplayName);$global:fortiTestrules+=@([pscustomobject]@{Name=[guid]::NewGuid().ToString();Namespace=$Namespace;Comment=$Comment}) }
 function global:Remove-DnsClientNrptRule { param($Name,[switch]$Force);$global:fortiTestrules=@($global:fortiTestrules|Where-Object Name -ne $Name) }
-function global:Resolve-DnsName { [CmdletBinding()]param($Name,$Server,$Type,[switch]$DnsOnly,[switch]$QuickTimeout,[switch]$TcpOnly);$global:fortiTestDnsCalls++;if($global:fortiTestfailResolve -or $global:fortiTestMissingNames -contains $Name){throw 'fake DNS failure'};if($global:fortiTestAlias){[pscustomobject]@{Type=5;NameHost='alias.example.com'}};$ips=@('198.51.100.80');if($global:fortiTestDnsMap.ContainsKey($Name)){$ips=@($global:fortiTestDnsMap[$Name])};foreach($ip in $ips){[pscustomobject]@{Type=1;IPAddress=$ip}} }
+function global:Resolve-DnsName { [CmdletBinding()]param($Name,$Server,$Type,[switch]$DnsOnly,[switch]$QuickTimeout,[switch]$TcpOnly);$global:fortiTestDnsCalls++;if(!$Server){return [pscustomobject]@{Type=1;IPAddress='203.0.113.199'}};if($global:fortiTestfailResolve -or $global:fortiTestMissingNames -contains $Name){throw 'fake DNS failure'};if($global:fortiTestAlias){[pscustomobject]@{Type=5;NameHost='alias.example.com'}};$ips=@('198.51.100.80');if($global:fortiTestDnsMap.ContainsKey($Name)){$ips=@($global:fortiTestDnsMap[$Name])};foreach($ip in $ips){[pscustomobject]@{Type=1;IPAddress=$ip}} }
 function Assert($condition,$message){if(-not $condition){throw $message}}
 try {
  @{Hosts=@('desktop.example.com','gateway.example.com','video.example.com')}|ConvertTo-Json|Set-Content (Join-Path $session 'config.json')
  $env:reason='connect';$env:TUNIDX='77';$env:INTERNAL_IP4_ADDRESS='192.0.2.50';$env:INTERNAL_IP4_DNS='192.0.2.53 192.0.2.54';$env:INTERNAL_IP4_MTU='1392'
- $network=Join-Path $PSScriptRoot 'FortiSplit.Work\Network.ps1'
+ $hooks=New-Item -ItemType Directory -Path (Join-Path $testRoot 'hooks')
+ $network=Join-Path $hooks.FullName 'Network.ps1'
+ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'FortiSplit.Work\Network.ps1') -Destination $network
  & $network -Session $session -Mode Hook
  $s=Get-Content (Join-Path $session 'network.json') -Raw|ConvertFrom-Json
  Assert ($s.Stage -eq 'base_ready') 'Base tunnel not ready'
@@ -65,8 +68,23 @@ try {
  & $network -Session $session -Mode Cleanup
  Assert (Test-Path (Join-Path $session 'network.json')) 'Failed cleanup lost recovery journal'
  $global:fortiTestfailRemove=$false
+ $global:fortiTestadapter.Name='Renamed adapter'
  & $network -Session $session -Mode Cleanup
  Assert (-not (Test-Path (Join-Path $session 'network.json'))) 'Cleanup retry failed'
+ Assert ($global:fortiTestroutes.Count -eq 0 -and $global:fortiTestips.Count -eq 0) 'Renamed adapter retained network settings'
+ Assert (@(Get-ChildItem -LiteralPath $journalDirectory.FullName).Count -eq 0) 'Privileged journal retained after cleanup'
+ $global:fortiTestadapter.Name='FortiSplitWork'
+ # Intact pre-upgrade journals are still recoverable. A reused index must
+ # never authorize cleanup on a different adapter or erase the journal.
+ & $network -Session $session -Mode Hook
+ $trustedJournal=Get-ChildItem -LiteralPath $journalDirectory.FullName -Filter '*.json'
+ Remove-Item -LiteralPath $trustedJournal.FullName
+ $global:fortiTestadapter.InterfaceGuid='another-test-guid'
+ & $network -Session $session -Mode Cleanup
+ Assert ((Test-Path (Join-Path $session 'network.json')) -and $global:fortiTestroutes.Count -gt 0) 'Reused index lost legacy recovery evidence'
+ $global:fortiTestadapter.InterfaceGuid='test-guid'
+ & $network -Session $session -Mode Cleanup
+ Assert (!(Test-Path (Join-Path $session 'network.json')) -and $global:fortiTestroutes.Count -eq 0) 'Legacy journal was not recovered'
  # A target known only to RD Gateway must not block the gateway VPN route.
  @{Hosts=@('gateway.example.com');OptionalHosts=@('desktop.example.com')}|ConvertTo-Json|Set-Content (Join-Path $session 'config.json')
  $global:fortiTestMissingNames=@('desktop.example.com')

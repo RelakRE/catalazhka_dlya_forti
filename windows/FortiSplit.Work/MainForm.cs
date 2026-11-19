@@ -121,15 +121,28 @@ internal sealed partial class MainForm : Form
  {
   if(preview || installingUpdate || worker is not null && !worker.HasExited)return;
   if(status.Stage=="recovery_required")throw new IOException("Сначала нажмите «Восстановить сеть» и дождитесь подтверждения очистки. Затем подключитесь заново.");
-  Config c=Save();string id=Guid.NewGuid().ToString("N");folder=Storage.SessionPath(id);Storage.Protect(folder);Storage.Save(Path.Combine(folder,"config.json"),c);
-  BeginAuth(id);
-  stop?.Dispose();stop=new EventWaitHandle(false,EventResetMode.ManualReset,Worker.StopName(id));
+  Config c=Save();string id=Guid.NewGuid().ToString("N");string sessionFolder=Storage.SessionPath(id);
+  Storage.Protect(sessionFolder);Storage.Save(Path.Combine(sessionFolder,"config.json"),c);
   using var self=Process.GetCurrentProcess(); var info=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=true,Verb="runas",WindowStyle=ProcessWindowStyle.Hidden};
   foreach(var arg in new[]{"--worker",id,self.Id.ToString(),self.StartTime.ToUniversalTime().Ticks.ToString()})info.ArgumentList.Add(arg);
-  worker?.Dispose();try{worker=Process.Start(info)??throw new IOException("Клиент не запущен.");}catch{CancelAuth();throw;}
-  _=ServeAuth(worker.Id,c);
+  var sessionStop=new EventWaitHandle(false,EventResetMode.ManualReset,Worker.StopName(id));
+  int workerId;
+  try {
+   BeginAuth(id);
+   workerId=StartWorker(info,sessionFolder);
+  }catch{
+   CancelAuth();authStop?.Dispose();authStop=null;sessionStop.Dispose();throw;
+  }
+  stop?.Dispose();stop=sessionStop;
+  _=ServeAuth(workerId,c);
   trafficSession=null;
   workRequestId=null;launched=false;stopRequested=false;recovering=false;closing=false;connectedAt=null;status=new("preparing","Подключаем VPN…");RefreshUi();
+ }
+ private int StartWorker(ProcessStartInfo info,string sessionFolder)
+ {
+  var next=Process.Start(info)??throw new IOException("Не удалось запустить сетевой компонент.");
+  worker?.Dispose();worker=next;folder=sessionFolder;
+  return next.Id;
  }
  private void RequestStop(){if(worker is null || worker.HasExited)return;stopRequested=true;CancelAuth();stop?.Set();status=new("disconnecting","Ожидаем отключения и очистки сети…");RefreshUi();}
  private void Poll()
@@ -160,10 +173,19 @@ internal sealed partial class MainForm : Form
   if(worker is not null&&!worker.HasExited)throw new IOException("Сначала отключите текущий VPN-сеанс.");
   string sessions=Path.Combine(Storage.Root,"sessions");
   var pending=Directory.Exists(sessions)?Directory.EnumerateFiles(sessions,"*.json",SearchOption.AllDirectories).Where(p=>Path.GetFileName(p) is "network.json" or "vpn-process.json").GroupBy(Path.GetDirectoryName).Select(g=>g.First()).OrderBy(File.GetLastWriteTimeUtc).ToArray():[];
-  if(pending.Length==0){MessageBox.Show("Незавершённых сетевых изменений не найдено.",Text);return;}
-  folder=Path.GetDirectoryName(pending[0])!;string id=Path.GetFileName(folder);Storage.SessionPath(id);
+  if(pending.Length==0){
+   FinishEmptyRecovery();MessageBox.Show(status.Message,Text);return;
+  }
+  string sessionFolder=Path.GetDirectoryName(pending[0])!;string id=Path.GetFileName(sessionFolder);Storage.SessionPath(id);
   var info=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=true,Verb="runas",WindowStyle=ProcessWindowStyle.Hidden};info.ArgumentList.Add("--recover");info.ArgumentList.Add(id);
-  worker?.Dispose();worker=Process.Start(info)??throw new IOException("Не удалось запустить восстановление сети.");recovering=true;status=new("disconnecting","Восстанавливаем сеть…");launched=true;RefreshUi();
+  StartWorker(info,sessionFolder);recovering=true;status=new("disconnecting","Восстанавливаем сеть…");launched=true;RefreshUi();
+ }
+ private void FinishEmptyRecovery()
+ {
+  worker?.Dispose();worker=null;stop?.Dispose();stop=null;
+  recovering=stopRequested=false;connectedAt=null;
+  status=new("disconnected","Незавершённых сетевых изменений не найдено.",Restored:true);
+  RefreshUi();
  }
  private void OpenLog(){string path=folder??Storage.Root;var info=new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),"explorer.exe")){UseShellExecute=true};info.ArgumentList.Add(path);Process.Start(info)?.Dispose();}
  private void RefreshUi(){

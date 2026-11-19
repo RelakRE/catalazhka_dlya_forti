@@ -17,7 +17,8 @@ internal sealed class AuthFormHistory
   string category=AuthPolicy.FormCategory(request);
   step=counts.GetValueOrDefault(category)+1;
   // OpenConnect reuses these IDs for HTML and tokeninfo challenges.
-  if(request.FormId is not ("" or "unknown" or "_challenge") && !requestedForms.Add((request.FormId,FieldKey(request))))
+  bool reusableChallenge=category=="challenge" && request.FormId is ("" or "unknown" or "_challenge");
+  if(!reusableChallenge && !requestedForms.Add((request.FormId,FieldKey(request))))
   {
    string fields=category=="login"?"логин и пароль":"код подтверждения или ответ";
    return new("auth_form_repeated",$"Сервер VPN повторно запросил {fields}. Причина отказа неизвестна. "+AuthPolicy.RetryLater);
@@ -58,7 +59,7 @@ public static class AuthPolicy
   if(IsLockout(form?.Error??"")||IsLockout(form?.Message??"")||IsLockout(banner))
    return new("auth_login_blocked","Сервер VPN временно ограничил вход из-за большого числа попыток. "+RetryLater);
   // OpenConnect can parse an HTML challenge from either HTTP 401 or HTTP 403.
-  if(httpEvent=="http_403" && form is not { FormId: "unknown", Fields.Length: >0 })
+  if(httpEvent=="http_403" && (form is not { FormId: "unknown", Fields.Length: >0 } || FormCategory(form)=="login"))
    return new("auth_access_denied","Сервер VPN отказал в доступе (HTTP 403). "+RetryLater+" Если отказ повторится, обратитесь в ИТ.");
   if(httpEvent=="http_405")
    return new("auth_input_rejected","Сервер VPN отклонил данные входа (HTTP 405). "+RetryLater);
@@ -71,7 +72,13 @@ public static class AuthPolicy
   "too many bad login attempts","too many failed login attempts","too many login attempts","слишком много попыток входа"
  }.Any(phrase=>text.Contains(phrase,StringComparison.OrdinalIgnoreCase));
 
- public static string FormCategory(AuthRequest request) => request.Fields.Any(IsUser)?"login":"challenge";
+ public static string FormCategory(AuthRequest request)
+ {
+  // Custom HTML forms can call their username field "email" or use a gateway-specific name.
+  bool hasLoginPair=request.Fields.Any(field=>field.Type==1) && request.Fields.Any(field=>
+   field.Type==2 && field.Name.ToLowerInvariant() is "password" or "passwd" or "j_password");
+  return request.Fields.Any(IsUser)||hasLoginPair?"login":"challenge";
+ }
  // Only fixed event names and numeric HTTP status reach diagnostics. Never retain
  // server text, headers, form values, or the native printf arguments themselves.
  public static string? HttpEvent(string statusLine) {

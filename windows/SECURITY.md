@@ -6,6 +6,10 @@
   answers and OTPs are not eligible for saving.
 - The elevated worker and UI exchange bounded messages over a current-user named pipe.
   Both sides verify the peer PID. Plaintext responses exist transiently in process memory.
+- The worker installs its embedded network scripts under `Program Files\Forti Split Network`.
+  Administrators and SYSTEM control this directory. Each build has its own scripts,
+  and a protected recovery journal records the tunnel adapter GUID. The session
+  directory contains a copy of the journal for the desktop interface.
 - Authentication cookies are passed to OpenConnect over stdin, never in argv or files.
   Console output is drained without logging. Native library progress text is discarded;
   only validated numeric HTTP status codes and fixed authentication events are retained.
@@ -15,8 +19,8 @@
   then, recorded routes/DNS settings and a remaining VPN process can persist.
   Manual recovery checks the recorded PID, creation time and executable path before
   stopping that process and removes only network settings owned by this app.
-- Profiles and session recovery metadata contain private names, IPs and local paths.
-  They live in LocalAppData and must not be committed. A private export is not encrypted.
+- Profiles and session reports in LocalAppData contain private names, IPs and local paths.
+  Keep these and the protected recovery journal out of Git. A private export is not encrypted.
 - Live work-address updates use a bounded hostname/IPv4 and DNS-domain request under
   the private session directory. They cannot replace authentication or run commands.
   Route refresh removes only recorded session-owned routes and preserves shared IPs.

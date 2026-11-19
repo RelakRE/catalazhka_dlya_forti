@@ -68,11 +68,13 @@ Separate entries with commas or newlines. IP addresses do not need to be known i
 advance. JSON profiles retain the existing hostname/IPv4 format. Optional private
 DNS suffixes in `DnsDomains` have no leading dot; each explicitly added hostname
 gets its own exact DNS rule even without a suffix. Redirects to another hostname
-require adding that hostname too. Resolution and host routes currently use IPv4.
+require adding that hostname too. Work destinations use IPv4. The VPN gateway
+hostname can resolve to IPv4 or IPv6.
 
 VPN DNS routes, optional literal IP routes and work-name/domain DNS rules are
 installed before any tunnel DNS query. DNS lookup runs after the synchronous
-OpenConnect hook. Missing names get up to three additional attempts, after 3, 10
+OpenConnect hook and uses the VPN's DNS servers for every attempt. Missing
+names get up to three additional attempts, after 3, 10
 and 30 seconds from the preceding attempt. A lookup pass stops starting queries
 after 15 seconds; an in-flight QuickTimeout query may finish later. Already
 resolved names are skipped during these retries. An unresolved name does not
@@ -101,6 +103,9 @@ There are no periodic network diagnostics, internet probes or watchdog.
 Normal Disconnect/Exit removes the session's settings. After a crash or unexpected
 disconnect, press Restore Network: it stops only the recorded VPN process and removes
 the app's own settings. Existing profiles and private credentials are reused.
+New sessions record the adapter GUID in a protected journal, so recovery follows
+a renamed tunnel. When recovering a session created by an older build, restore
+the adapter name `FortiSplitWork` first if it has been renamed.
 
 For a fresh installation, open Settings, expand Advanced, set the VPN server and select
 the RDP file. Configure TrueConf if needed. Password/OTP are entered at connection time.
@@ -132,7 +137,8 @@ credentials, server response bodies, headers or cookies. HTTP status extraction 
 limited to the known upstream printf literal on Windows x64; other progress output
 is discarded. HTTP 429, terminal 403, 405 and 5xx responses and recognized
 login-limit notices have specific messages. An HTML MFA form with input fields
-can be shown after HTTP 401 or 403. OpenConnect reuses identifiers for HTML and
+can be shown after HTTP 401 or 403. A 403 containing a username/password form
+ends the attempt. OpenConnect reuses identifiers for HTML and
 tokeninfo challenges, so the app allows these forms within the six-step limit
 per category. Repeated forms with a specific ID and the same input fields end
 the attempt and suggest waiting about two minutes before reconnecting. The actual

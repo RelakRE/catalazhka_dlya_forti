@@ -1,4 +1,6 @@
 using System.IO.Pipes;
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Security.Cryptography;
 
 namespace FortiSplit.Work;
@@ -15,6 +17,7 @@ internal static class OfflineChecks
    var settings=main.Controls.Find("settings",true).OfType<TabPage>().Single();
    checks["vpn_traffic_hidden_when_disconnected"]=!work.Controls.Find("vpn-traffic",true).OfType<Label>().Single().Visible;
    checks["main_has_one_connection_action"]=work.Controls.Find("connection-action",true).OfType<Button>().Count()==1 && work.Controls.Find("work-content",true).OfType<FlowLayoutPanel>().Single().Controls.OfType<Button>().Count()==1;
+   main.CheckFailedWorkerStart(checks);
    checks["other_actions_on_settings"]=settings.Controls.Find("connection-action",true).Length==0 && settings.Controls.OfType<FlowLayoutPanel>().Any();
    checks["window_width_fixed"]=main.MinimumSize.Width==main.MaximumSize.Width && main.MinimumSize.Width>0 && main.MaximumSize.Height>main.MinimumSize.Height;
    checks["window_content_visible"]=main.Height>=main.MinimumSize.Height && main.ClientSize.Height>=300 && work.ClientSize.Height>=200;
@@ -62,6 +65,20 @@ internal static class OfflineChecks
   }
   string recoveryTest=Path.Combine(Path.GetTempPath(),"FortiSplitRecoveryCheck-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(recoveryTest);
   try{
+   using var identity=System.Security.Principal.WindowsIdentity.GetCurrent();
+   bool elevated=new System.Security.Principal.WindowsPrincipal(identity).IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+   string scriptRoot=Path.Combine(recoveryTest,"hooks");
+   if(elevated){
+    NetworkScripts.InstallInto(scriptRoot);
+    NetworkScripts.InstallInto(scriptRoot);
+    checks["protected_script_install_is_repeatable"]=true;
+   }
+   foreach(string name in new[]{"Network.ps1","network-hook.js"}){
+    using var embedded=typeof(NetworkScripts).Assembly.GetManifestResourceStream(name);
+    string path=elevated?Directory.GetFiles(scriptRoot,name,SearchOption.AllDirectories).Single():Path.Combine(AppContext.BaseDirectory,name);
+    using var file=File.OpenRead(path);
+    checks["embedded_"+name]=embedded is not null && SHA256.HashData(embedded).SequenceEqual(SHA256.HashData(file));
+   }
    string image=Path.Combine(recoveryTest,"openconnect.exe");
    Storage.Save(Path.Combine(recoveryTest,"vpn-process.json"),new{Id=Environment.ProcessId,StartTicks=0L,Image=image});
    try{Worker.StopSavedClient(recoveryTest);checks["manual_recovery_refuses_own_process"]=false;}catch(IOException){checks["manual_recovery_refuses_own_process"]=true;}
@@ -70,5 +87,26 @@ internal static class OfflineChecks
   }catch(Exception){checks["manual_recovery_handles_missing_process"]=false;}
   finally{try{Directory.Delete(recoveryTest,true);}catch{}}
   bool passed=checks.Values.All(x=>x);Storage.Save(Path.GetFullPath(output),new{Successful=passed,Checks=checks,NoVpnConnection=true});return passed?0:1;
+ }
+}
+
+internal sealed partial class MainForm
+{
+ internal void CheckFailedWorkerStart(Dictionary<string,bool> checks)
+ {
+  // A failed Process.Start follows the same rollback path as a refused UAC launch.
+  using var previous=Process.GetCurrentProcess();
+  string missing=Path.Combine(Path.GetTempPath(),Guid.NewGuid().ToString("N"),"absent.exe");
+  worker=previous;folder="previous-session";
+  try {
+   StartWorker(new ProcessStartInfo(missing){UseShellExecute=false},"new-session");
+   checks["failed_start_preserves_previous_worker"]=false;
+  }catch(Win32Exception){
+   checks["failed_start_preserves_previous_worker"]=worker.Id==Environment.ProcessId && folder=="previous-session";
+  }finally{worker=null;folder=null;}
+  status=new("recovery_required","");stopRequested=true;RefreshUi();
+  bool blocked=!connect.Enabled;
+  FinishEmptyRecovery();Poll();
+  checks["empty_recovery_enables_connect"]=blocked && connect.Enabled && status.Restored && status.Stage=="disconnected";
  }
 }

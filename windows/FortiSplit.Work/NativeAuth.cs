@@ -129,8 +129,7 @@ internal static class NativeAuth
    string cookie=Text(openconnect_get_cookie(info),65536),url=Text(openconnect_get_connect_url(info)),dns=Text(openconnect_get_dnsname(info)),address=Text(openconnect_get_hostname(info));
    if(cookie.Length==0||cookie.Contains('\n')||cookie.Contains('\r'))throw new IOException("VPN не выдал сеанс входа.");
    var endpoint=new Uri(url);if(endpoint.Scheme!="https"||!endpoint.Host.Equals(new Uri(config.Server).Host,StringComparison.OrdinalIgnoreCase))throw new IOException("VPN перенаправил вход на другой сервер.");
-   Config.Host(dns);Config.IPv4(address);
-   return new(cookie,url,dns+":"+address);
+   return new(cookie,url,Config.GatewayResolve(dns,address));
   }finally{lifetime.Cancel();monitor?.GetAwaiter().GetResult();openconnect_vpninfo_free(info);WSACleanup();GC.KeepAlive(cert);GC.KeepAlive(progress);GC.KeepAlive(formCallback);}
  }
 }

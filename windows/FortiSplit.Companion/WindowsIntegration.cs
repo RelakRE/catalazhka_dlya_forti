@@ -27,13 +27,16 @@ public static class WindowsIntegration
     public static AdapterChoice[] Adapters() => NetworkInterface.GetAllNetworkInterfaces().Where(IsFortinet)
         .Select(adapter => new AdapterChoice(adapter.Id, $"{adapter.Name} — {adapter.Description}")).ToArray();
 
+    internal static bool IsAdapterIPv4(IPAddress address) =>
+        address.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(address)
+        && address.GetAddressBytes() is not [169, 254, ..];
+
     public static bool HasVpnRoute(WorkplaceSettings settings)
     {
         var adapter = NetworkInterface.GetAllNetworkInterfaces().SingleOrDefault(x => x.Id == settings.AdapterId);
         if (adapter is null) return false;
         bool fortinet = IsFortinet(adapter), up = adapter.OperationalStatus == OperationalStatus.Up;
-        bool ipv4 = adapter.GetIPProperties().UnicastAddresses.Any(x => x.Address.AddressFamily == AddressFamily.InterNetwork
-            && !IPAddress.IsLoopback(x.Address) && x.Address.GetAddressBytes()[0] != 169);
+        bool ipv4 = adapter.GetIPProperties().UnicastAddresses.Any(x => IsAdapterIPv4(x.Address));
         if (!fortinet || !up || !ipv4) return WorkplaceRun.Eligible(up, fortinet, ipv4, false, true);
         var bytes = IPAddress.Parse(settings.ProbeAddress).GetAddressBytes();
         var index = adapter.GetIPProperties().GetIPv4Properties()?.Index;

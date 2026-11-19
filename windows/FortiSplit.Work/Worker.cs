@@ -21,7 +21,7 @@ internal static class Worker
  internal static async Task<int> Script(string folder,string mode)
  {
   var info=new ProcessStartInfo(Storage.PowerShell) { UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true };
-  foreach(var arg in new[]{"-NoLogo","-NoProfile","-ExecutionPolicy","Bypass","-File",Path.Combine(AppContext.BaseDirectory,"Network.ps1"),"-Mode",mode,"-Session",folder}) info.ArgumentList.Add(arg);
+  foreach(var arg in new[]{"-NoLogo","-NoProfile","-ExecutionPolicy","Bypass","-File",NetworkScripts.PowerShellScript,"-Mode",mode,"-Session",folder}) info.ArgumentList.Add(arg);
   using var process=Process.Start(info) ?? throw new IOException("Не запущен сетевой обработчик.");
   var stdout=process.StandardOutput.ReadToEndAsync(); var stderr=process.StandardError.ReadToEndAsync();
   // Do not kill a network mutation mid-operation: parent/worker wait for its completion.
@@ -46,23 +46,18 @@ internal static class Worker
   using var identity=WindowsIdentity.GetCurrent();
   if (!new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator)) return 2;
   using var mutex=new Mutex(false,@"Global\FortiSplitWork-Session"); bool locked=false;
-  Process? vpn=null; bool cleaned=false; string failure="";
+  Process? vpn=null; bool cleaned=false,scriptsReady=false; string failure="";
   try {
    if(recovery){try{using var previousStop=EventWaitHandle.OpenExisting(StopName(id));previousStop.Set();}catch(WaitHandleCannotBeOpenedException){}}
    try { locked=mutex.WaitOne(recovery?30000:0); } catch(AbandonedMutexException) { locked=true; }
    if(!locked) throw new IOException("Другой сеанс VPN ещё выполняется.");
+   NetworkScripts.Prepare();
+   scriptsReady=true;
    if(recovery) { StopSavedClient(folder);cleaned=Script(folder,"Cleanup").GetAwaiter().GetResult()==0;if(cleaned)File.Delete(Path.Combine(folder,"vpn-process.json")); State(folder,cleaned?"disconnected":"recovery_required",cleaned?"Сеть восстановлена.":"Не удалось подтвердить восстановление сети.",restored:cleaned); return cleaned?0:1; }
    using var parent=Process.GetProcessById(parentId);
    if(parent.StartTime.ToUniversalTime().Ticks!=parentTicks || !string.Equals(parent.MainModule?.FileName,Environment.ProcessPath,StringComparison.OrdinalIgnoreCase)) throw new IOException("Главное окно недоступно.");
    using var stop=EventWaitHandle.OpenExisting(StopName(id));
    Config config=Storage.Read<Config>(Path.Combine(folder,"config.json")); config.Validate();
-   // MinGW builds may not round-trip a Cyrillic --script path. Stage the hook
-   // in this private session, which is ASCII on this machine, before connecting.
-   if(folder.Any(c=>c>127)) throw new IOException("Для этой сборки OpenConnect нужен профиль Windows с латинским путём AppData.");
-   foreach(string file in new[]{"network-hook.js","Network.ps1"}) {
-    string destination=Path.Combine(folder,file);Storage.RegularPath(destination);
-    File.Copy(Path.Combine(AppContext.BaseDirectory,file),destination,true);
-   }
    // Refuse a new session until every previous journal has been cleaned.
    if(Directory.EnumerateFiles(Path.Combine(Storage.Root,"sessions"),"*.json",SearchOption.AllDirectories).Any(p=>Path.GetDirectoryName(p)!=folder && Path.GetFileName(p) is "network.json" or "vpn-process.json")) throw new IOException("Есть незавершённый сеанс. Нажмите «Восстановить сеть».");
    if(stop.WaitOne(0) || parent.HasExited) return 0;
@@ -86,7 +81,7 @@ internal static class Worker
    if(!AllocConsole() || !SetConsoleCtrlHandler(handler,true)) throw new IOException("Не удалось подготовить VPN-процесс.");
    ShowWindow(GetConsoleWindow(),0);
    var info=new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory,"client","openconnect.exe")) { UseShellExecute=false,WorkingDirectory=AppContext.BaseDirectory,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true };
-   foreach(var arg in new[]{"--protocol=fortinet","--interface="+TunnelTraffic.AdapterName,"--disable-ipv6","--no-proxy","--no-dtls","--force-dpd=60","--reconnect-timeout=60","--non-inter","--cookie-on-stdin","--resolve",login.Resolve,"--script",Path.Combine(folder,"network-hook.js")}) info.ArgumentList.Add(arg);
+   foreach(var arg in new[]{"--protocol=fortinet","--interface="+TunnelTraffic.AdapterName,"--disable-ipv6","--no-proxy","--no-dtls","--force-dpd=60","--reconnect-timeout=60","--non-inter","--cookie-on-stdin","--resolve",login.Resolve,"--script",NetworkScripts.Hook}) info.ArgumentList.Add(arg);
    if(config.User.Length>0) { info.ArgumentList.Add("--user");info.ArgumentList.Add(config.User); }
    info.ArgumentList.Add(login.ConnectUrl);info.Environment["FORTISPLIT_SESSION"]=folder;
    // OpenConnect can reuse an existing adapter with counters from a previous session.
@@ -159,14 +154,14 @@ internal static class Worker
    if(locked && !recovery) {
     try {
      bool requested=consoleStop;try{using var requestedStop=EventWaitHandle.OpenExisting(StopName(id));requested|=requestedStop.WaitOne(0);}catch(WaitHandleCannotBeOpenedException){}
-     if(requested){
+     if(requested && scriptsReady){
       State(folder,"disconnecting","Отключаем VPN и восстанавливаем настройки…");
       if(vpn is not null && !vpn.HasExited){GenerateConsoleCtrlEvent(0,0);if(!vpn.WaitForExit(10000)){vpn.Kill();vpn.WaitForExit();}}
       cleaned=Script(folder,"Cleanup").GetAwaiter().GetResult()==0;
       if(cleaned)File.Delete(Path.Combine(folder,"vpn-process.json"));
       State(folder,cleaned?"disconnected":"recovery_required",cleaned?"VPN отключён. Сетевые настройки восстановлены.":"Нажмите «Восстановить сеть».",restored:cleaned);
      }else{
-      bool pending=File.Exists(Path.Combine(folder,"network.json"))||(vpn is not null&&!vpn.HasExited);
+      bool pending=File.Exists(Path.Combine(folder,"network.json"))||(scriptsReady && NetworkScripts.HasJournal(id))||(vpn is not null&&!vpn.HasExited);
       if(!pending)File.Delete(Path.Combine(folder,"vpn-process.json"));
       State(folder,pending?"recovery_required":"error",failure,restored:!pending);
      }

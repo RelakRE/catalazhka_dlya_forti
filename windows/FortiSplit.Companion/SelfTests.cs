@@ -22,6 +22,9 @@ internal static class SelfTests
             id = run.Begin(now); checks["new_run_new_id"] = id != Guid.Empty;
             checks["bounded_wait"] = run.Expire(now.AddMinutes(6)) && !run.Confirm(id);
             checks["no_blind_reconnect"] = run.Phase == RunPhase.Idle;
+            checks["adapter_excludes_only_link_local_169_range"] =
+                WindowsIntegration.IsAdapterIPv4(System.Net.IPAddress.Parse("169.1.2.3")) &&
+                !WindowsIntegration.IsAdapterIPv4(System.Net.IPAddress.Parse("169.254.2.3"));
             for (int bits = 0; bits < 32; bits++)
                 checks["eligibility_" + bits] = WorkplaceRun.Eligible((bits & 1) != 0, (bits & 2) != 0,
                     (bits & 4) != 0, (bits & 8) != 0, (bits & 16) != 0) == (bits == 31);
