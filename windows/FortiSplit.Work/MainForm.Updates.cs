@@ -5,7 +5,7 @@ namespace FortiSplit.Work;
 internal sealed partial class MainForm
 {
  private readonly Label updateBanner=new(){AutoSize=true,Visible=false,ForeColor=SystemColors.HotTrack,Margin=new Padding(0,8,0,4)};
- private readonly Label updateInfo=new(){Text="Проверка при запуске приложения.",AutoSize=true,Margin=new Padding(0,3,0,6)};
+ private readonly Label updateInfo=new(){Text="Проверка при запуске приложения.",AutoSize=true,ForeColor=WorkMuted,Margin=new Padding(0,3,0,8)};
  private readonly Button installUpdate=Btn("Обновить"),openUpdate=Btn("Открыть выпуск");
  private readonly CancellationTokenSource updateStop=new();
  private UpdateCandidate? availableUpdate;
@@ -13,10 +13,8 @@ internal sealed partial class MainForm
 
  private void AddUpdateSettings(FlowLayoutPanel parent)
  {
-  parent.Controls.Add(Label("Обновления"));parent.Controls.Add(updateInfo);ConstrainText(parent,updateInfo);
-  var buttons=ButtonPair(installUpdate,openUpdate);buttons.Name="update-actions";parent.Controls.Add(buttons);FillWidth(parent,buttons);
-  // Keep the final row clear of the scroll viewport edge, including at larger Windows scaling.
-  parent.Controls.Add(new Panel{Name="settings-bottom-space",Width=1,Height=80,Margin=Padding.Empty});
+  parent.Controls.Add(updateInfo);ConstrainText(parent,updateInfo);
+  AddSettingsActions(parent,installUpdate,openUpdate).Name="update-actions";
   installUpdate.Enabled=openUpdate.Enabled=false;
   installUpdate.Click+=async(_,_)=>await InstallAvailableUpdate();
   openUpdate.Click+=(_,_)=>Try(()=>{if(availableUpdate is not null)Process.Start(new ProcessStartInfo(availableUpdate.PageUrl){UseShellExecute=true})?.Dispose();});
@@ -30,7 +28,7 @@ internal sealed partial class MainForm
    if(IsDisposed||updateStop.IsCancellationRequested)return;
    availableUpdate=result;openUpdate.Enabled=result is not null;installUpdate.Enabled=result?.CanInstall==true;
    if(result is null){updateBanner.Visible=false;updateInfo.Text="Новых версий не найдено.";}
-   else{updateInfo.Text=result.CanInstall?$"Доступна версия {result.Version}.":$"Доступна версия {result.Version}. Откройте выпуск для установки.";updateBanner.Text=$"Доступна версия {result.Version}. Откройте настройки.";updateBanner.Visible=true;}
+   else{updateInfo.Text=result.CanInstall?$"Доступна версия {result.Version}.":$"Доступна версия {result.Version}. Откройте выпуск для установки.";updateBanner.Text=$"Доступна версия {result.Version}. Настройки → Обслуживание.";updateBanner.Visible=true;}
   }catch(OperationCanceledException) when(updateStop.IsCancellationRequested){}
   catch(Exception){if(!IsDisposed)updateInfo.Text="Не удалось проверить обновления.";}
  }

@@ -65,16 +65,17 @@ $builtVersion=(Get-Item -LiteralPath $exe).VersionInfo.ProductVersion
 if(($builtVersion -split '\+',2)[0] -cne $projectVersion){throw 'Release version mismatch'}
 $archive=Join-Path $assets "$packageName.zip"
 # Archive the clean app before downloading any third-party binaries for tests.
+$packageFiles=@('Forti Split.exe','Network.ps1','network-hook.js','profile.example.json','SECURITY.md',
+ 'THIRD-PARTY.md','fortisplit-update-v1.json','ПРОЧИТАЙ МЕНЯ.txt','licenses')
+$packageEntries=@(Get-ChildItem -LiteralPath $output -Force)
+if(Compare-Object $packageFiles $packageEntries.Name){throw 'Unexpected release package contents'}
+if(@(Get-ChildItem -LiteralPath $output -Force -Recurse | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count){
+ throw 'Release package cannot contain links'
+}
 Compress-Archive -Path (Join-Path $output '*') -DestinationPath $archive -CompressionLevel Optimal
-$prepare=Start-Process -FilePath $exe -ArgumentList '--prepare-runtime' -PassThru -WindowStyle Hidden
-if(!$prepare.WaitForExit(600000)){$prepare.Kill();throw 'Runtime preparation timeout'}
-if($prepare.ExitCode -ne 0){throw 'Official runtime preparation failed'}
 $report=Join-Path $assets 'WINDOWS-VALIDATION.json'
-$test=Start-Process -FilePath $exe -ArgumentList @('--self-test',('"'+$report+'"')) -PassThru -WindowStyle Hidden
-if(!$test.WaitForExit(60000)){$test.Kill();throw 'Offline self-test timeout'}
-if($test.ExitCode -ne 0){throw 'Native offline self-tests failed'}
+./test_work_native.ps1 -Executable $exe -Report $report
 $validation=Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
-if(!$validation.Successful){throw 'Incomplete self-test evidence'}
 $runtime=& (Join-Path $output 'client\openconnect.exe') --version 2>$null
 if($LASTEXITCODE -ne 0 -or ($runtime -join '') -notmatch 'v9\.21'){throw 'Unexpected OpenConnect version'}
 $validation | Add-Member -NotePropertyName SourceCommit -NotePropertyValue $SourceCommit

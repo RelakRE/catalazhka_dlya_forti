@@ -14,7 +14,13 @@
   Console output is drained without logging. Native library progress text is discarded;
   only validated numeric HTTP status codes and fixed authentication events are retained.
 - TLS validation failures are rejected. The app provides no trust-bypass checkbox.
-- Network self-diagnostics and watchdog recovery are disabled. Normal Disconnect/Exit
+- The Work tab uses the IPv4 addresses and packet lengths observed on the VPN
+  interface to count traffic to configured work IPs. Packet contents are discarded.
+  The private session status contains the currently active work IPs, their names,
+  aggregate counters, rates, and activity intervals. It also retains the five most
+  recent completed intervals with address and timestamps.
+- Route, ICMP and TCP checks run on request for one chosen IPv4. ICMP and TCP are
+  attempted only for VPN routes, with the VPN source address. Normal Disconnect/Exit
   removes session changes. After an unexpected failure, use Restore Network; until
   then, recorded routes/DNS settings and a remaining VPN process can persist.
   Manual recovery checks the recorded PID, creation time and executable path before

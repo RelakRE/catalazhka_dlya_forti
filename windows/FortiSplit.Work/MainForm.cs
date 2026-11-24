@@ -10,12 +10,12 @@ internal sealed partial class MainForm : Form
  private readonly Label state = new() { Text="VPN отключён",AutoSize=true,Font=new Font("Segoe UI",23),MaximumSize=new Size(650,0),Margin=new Padding(0,3,0,3) };
  private readonly Label detail = new() { Text="Перед подключением отключите FortiClient.",AutoSize=true,MaximumSize=new Size(650,0),Margin=new Padding(0,3,0,3) };
  private readonly Label duration = new() { AutoSize=true,ForeColor=SystemColors.GrayText,Margin=new Padding(0,3,0,3) };
- private readonly Label settingsNotice = new() { AutoSize=true,MaximumSize=new Size(650,0),AccessibleName="Результат настройки",Margin=new Padding(0,3,0,3) };
+ private readonly Label settingsNotice = new() { Name="save-notice",Dock=DockStyle.Fill,AutoEllipsis=true,AccessibleName="Результат настройки" };
+ private readonly Button saveSettings = Btn("Сохранить настройки");
  private readonly Button connect=Btn("Подключить"), rdpButton=Btn("Открыть RDP"), tcButton=Btn("Открыть TrueConf"), restore=Btn("Восстановить сеть"), logs=Btn("Открыть журнал");
- private readonly TextBox server=Box(), user=Box(), rdp=Box(), tc=Box(), tcHost=Box(), extra=Box(), dnsDomains=Box();
+ private readonly TextBox server=Box(), user=Box(), rdp=Box(), tc=Box(), tcHost=Box(), dnsDomains=Box();
  private readonly CheckBox autoRdp=Check("Открывать RDP после подключения"), autoTc=Check("Открывать TrueConf после подключения"), autoConnect=Check("Подключаться при открытии приложения");
  private readonly NumericUpDown tcPort=new(){Minimum=1,Maximum=65535,Value=4307,Width=120};
- private readonly CheckBox advancedToggle=new(){Name="advanced-toggle",Text="▸  Дополнительные настройки",Appearance=Appearance.Button,AutoSize=false,FlatStyle=FlatStyle.Flat,Font=new Font("Segoe UI",11,FontStyle.Bold),TextAlign=ContentAlignment.MiddleLeft,Padding=new Padding(10,0,0,0),Margin=new Padding(0,4,0,4)};
  private readonly System.Windows.Forms.Timer poll=new(){Interval=500};
  private NotifyIcon? tray; private Process? worker; private EventWaitHandle? stop;
  private string? folder; private bool launched, closing, polling, stopRequested, recovering; private DateTime? connectedAt;
@@ -24,7 +24,6 @@ internal sealed partial class MainForm : Form
  private static Button Btn(string text)=>new(){Text=text,Width=210,Height=44,FlatStyle=FlatStyle.Flat,Margin=new Padding(0,6,12,6)};
  private static TextBox Box()=>new(){Width=100,Margin=new Padding(0,3,0,3)};
  private static CheckBox Check(string text)=>new(){Text=text,AutoSize=true,Margin=new Padding(0,8,0,8)};
- private static Label Label(string text)=>new(){Text=text,AutoSize=true,MaximumSize=new Size(720,0),Margin=new Padding(0,8,0,6)};
  private static FlowLayoutPanel Column()=>new(){Dock=DockStyle.Fill,AutoScroll=true,FlowDirection=FlowDirection.TopDown,WrapContents=false,Padding=new Padding(20)};
  private static void FillWidth(FlowLayoutPanel parent,Control child)
  {
@@ -44,46 +43,13 @@ internal sealed partial class MainForm : Form
   left.Dock=right.Dock=DockStyle.Fill;left.Margin=new Padding(0,4,6,4);right.Margin=new Padding(6,4,0,4);
   row.Controls.Add(left,0,0);row.Controls.Add(right,1,0);return row;
  }
- private TableLayoutPanel FilePicker(TextBox field,string filter,string name)
- {
-  var row=new TableLayoutPanel{Name=name,AutoSize=false,Height=40,ColumnCount=2,RowCount=1,Margin=new Padding(0,0,0,4)};
-  row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,44));
-  field.Dock=DockStyle.Fill;field.Margin=new Padding(0,5,6,0);
-  var browse=new Button{Text="\uE8B7",Font=new Font("Segoe MDL2 Assets",13),AccessibleName=name=="rdp-picker"?"Выбрать файл RDP":"Выбрать TrueConf",Dock=DockStyle.Fill,Height=36,Margin=Padding.Empty};
-  browse.Click+=(_,_)=>Choose(field,filter);options.Add(browse);row.Controls.Add(field,0,0);row.Controls.Add(browse,1,0);return row;
- }
  internal MainForm(bool preview)
  {
   this.preview=preview; try{Icon=System.Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath!);}catch(Exception){} Text="Forti Split · "+Application.ProductVersion.Split('+')[0]; Font=new Font("Segoe UI",11); AutoScaleMode=AutoScaleMode.Font; MinimumSize=new Size(620,480); MaximumSize=new Size(620,10000); Size=new Size(620,720); MaximizeBox=false;
   var work=new TabPage("Работа"){Name="work"}; var settings=new TabPage("Настройки"){Name="settings"}; tabs.TabPages.AddRange([work,settings]); Controls.Add(tabs);
   var main=Column();main.Name="work-content";work.Controls.Add(main);
-  main.Controls.AddRange([state,detail,duration,trafficLabel,connect,updateBanner]);ConstrainText(main,state);ConstrainText(main,detail);ConstrainText(main,trafficLabel);ConstrainText(main,updateBanner);connect.Margin=new Padding(0,12,0,6);FillWidth(main,connect);
-  var config=Column();config.Name="settings-content";settings.Controls.Add(config);
-  var footer=new Panel{Name="settings-footer",Dock=DockStyle.Bottom,Height=98,Padding=new Padding(20,4,20,12)};settings.Controls.Add(footer);footer.SendToBack();
-  void AlignFooter(){int right=20+Math.Max(0,footer.ClientSize.Width-config.ClientSize.Width);if(footer.Padding.Right!=right)footer.Padding=new Padding(20,4,right,12);}
-  config.ClientSizeChanged+=(_,_)=>AlignFooter();footer.ClientSizeChanged+=(_,_)=>AlignFooter();
-  config.Controls.Add(Label("Рабочие приложения"));
-  var apps=ButtonPair(rdpButton,tcButton);config.Controls.Add(apps);FillWidth(config,apps);
-  config.Controls.Add(Label("Восстановление"));
-  var recovery=ButtonPair(restore,logs);config.Controls.Add(recovery);FillWidth(config,recovery);
-  config.Controls.Add(Label("При подключении"));
-  HelpOption(config,"auto-rdp",autoRdp,false);HelpOption(config,"auto-tc",autoTc,false);HelpOption(config,"auto-connect",autoConnect,false);
-  HelpField(config,"login",user);HelpOption(config,"remember",rememberPassword);
-  HelpField(config,"rdp",rdp,FilePicker(rdp,"RDP (*.rdp)|*.rdp","rdp-picker"));
-  var advancedRow=HelpRow(advancedToggle,"advanced");config.Controls.Add(advancedRow);FillWidth(config,advancedRow);
-  var advanced=new FlowLayoutPanel{Name="advanced-content",AutoSize=false,FlowDirection=FlowDirection.TopDown,WrapContents=false,Visible=false,Margin=Padding.Empty};config.Controls.Add(advanced);FillWidth(config,advanced);
-  bool sizingAdvanced=false;void FitAdvanced(){if(!advanced.Visible||sizingAdvanced)return;sizingAdvanced=true;try{int height=advanced.GetPreferredSize(new Size(advanced.ClientSize.Width,0)).Height;if(advanced.Height!=height)advanced.Height=height;}finally{sizingAdvanced=false;}}
-  advanced.Layout+=(_,_)=>FitAdvanced();advancedToggle.CheckedChanged+=(_,_)=>{advancedToggle.Text=(advancedToggle.Checked?"▾":"▸")+"  Дополнительные настройки";advanced.Visible=advancedToggle.Checked;FitAdvanced();};
-  HelpField(advanced,"vpn",server);HelpField(advanced,"tc-program",tc,FilePicker(tc,"Программа (*.exe)|*.exe","trueconf-picker"));
-  HelpField(advanced,"tc-server",tcHost);HelpField(advanced,"tc-port",tcPort);HelpField(advanced,"sites",extra);HelpField(advanced,"domains",dnsDomains);
-  extra.Multiline=true;extra.Height=85;extra.ScrollBars=ScrollBars.Vertical;
-  var applyRow=HelpRow(applyWorkAddresses,"apply-sites");advanced.Controls.Add(applyRow);FillWidth(advanced,applyRow);advanced.Controls.Add(settingsNotice);ConstrainText(advanced,settingsNotice);applyWorkAddresses.Click+=(_,_)=>Try(ApplyWorkAddresses);
-  var import=Btn("Импорт профиля…");var export=Btn("Экспорт профиля…");var profiles=ButtonPair(import,export);profiles.Name="profile-actions";var profileRow=HelpRow(profiles,"profiles");config.Controls.Add(profileRow);FillWidth(config,profileRow);options.Add(import);options.Add(export);
-  import.Click+=(_,_)=>Try(()=>{using var dialog=new OpenFileDialog{Filter="Профиль (*.json)|*.json"};if(dialog.ShowDialog()==DialogResult.OK)Apply(Storage.Read<Config>(dialog.FileName));});
-  export.Click+=(_,_)=>Try(()=>{Config profile=Save();using var dialog=new SaveFileDialog{Filter="Приватный профиль (*.local.json)|*.local.json",FileName="profile.local.json"};if(dialog.ShowDialog()==DialogResult.OK)Storage.Save(dialog.FileName,profile);});
-  AddUpdateSettings(config);
-  var savedNotice=new Label{Name="save-notice",Dock=DockStyle.Top,Height=22,AccessibleName="Результат сохранения"};
-  var save=Btn("Сохранить");save.Name="save-settings";save.BackColor=SystemColors.Highlight;save.ForeColor=SystemColors.HighlightText;save.Font=new Font("Segoe UI",11,FontStyle.Bold);save.Dock=DockStyle.Fill;save.Margin=Padding.Empty;footer.Controls.Add(save);footer.Controls.Add(savedNotice);savedNotice.SendToBack();options.Add(save);save.Click+=(_,_)=>Try(()=>{Save();savedNotice.Text="Настройки сохранены.";});
+  BuildWorkView(main);
+  BuildSettingsView(settings);
   Config initial=new();
   if(!preview) {
    string path=Path.Combine(Storage.Root,"settings.json"); if(File.Exists(path)) {try{initial=Storage.Read<Config>(path);}catch(Exception){detail.Text="Не удалось прочитать настройки. Проверьте вкладку «Настройки».";}}
@@ -115,8 +81,8 @@ internal sealed partial class MainForm : Form
  }
  private void Try(Action action){try{action();}catch(Exception e){detail.Text=e.Message;MessageBox.Show(e.Message,"Forti Split");}}
  private void Choose(TextBox field,string filter){using var dialog=new OpenFileDialog{Filter=filter,CheckFileExists=true};if(dialog.ShowDialog()==DialogResult.OK)field.Text=dialog.FileName;}
- private void Apply(Config c){profile=c;server.Text=c.Server;user.Text=c.User;rdp.Text=c.Rdp;tc.Text=c.TrueConf;tcHost.Text=c.TrueConfHost;tcPort.Value=c.TrueConfPort;autoRdp.Checked=c.AutoRdp;autoTc.Checked=c.AutoTrueConf;autoConnect.Checked=c.ConnectOnOpen;rememberPassword.Checked=c.RememberPassword;extra.Text=string.Join(", ",c.ExtraHosts);dnsDomains.Text=string.Join(", ",c.DnsDomains);}
- private Config Save(){var c=new Config{Server=server.Text.Trim(),User=user.Text.Trim(),RememberPassword=rememberPassword.Checked,Rdp=rdp.Text.Trim(),TrueConf=tc.Text.Trim(),TrueConfHost=tcHost.Text.Trim(),TrueConfFallback=tcHost.Text.Trim().Equals(profile.TrueConfHost,StringComparison.OrdinalIgnoreCase)?profile.TrueConfFallback:"",TrueConfPort=(int)tcPort.Value,AutoRdp=autoRdp.Checked,AutoTrueConf=autoTc.Checked,ConnectOnOpen=autoConnect.Checked,DnsDomains=dnsDomains.Text.Split([',', ';' ],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries),ExtraHosts=Config.ParseWorkHosts(extra.Text)};c.Validate();c.PrepareRdp(c.Rdp.Length>0?File.ReadAllText(c.Rdp):"");SaveProfile(c);return c;}
+ private void Apply(Config c){profile=c;server.Text=c.Server;user.Text=c.User;rdp.Text=c.Rdp;tc.Text=c.TrueConf;tcHost.Text=c.TrueConfHost;tcPort.Value=c.TrueConfPort;autoRdp.Checked=c.AutoRdp;autoTc.Checked=c.AutoTrueConf;autoConnect.Checked=c.ConnectOnOpen;rememberPassword.Checked=c.RememberPassword;workAddresses.Items.Clear();workAddresses.Items.AddRange(c.ExtraHosts);workAddressInput.Clear();dnsDomains.Text=string.Join(", ",c.DnsDomains);RefreshWorkAddressEditor();}
+ private Config Save(){var c=new Config{Server=server.Text.Trim(),User=user.Text.Trim(),RememberPassword=rememberPassword.Checked,Rdp=rdp.Text.Trim(),TrueConf=tc.Text.Trim(),TrueConfHost=tcHost.Text.Trim(),TrueConfFallback=tcHost.Text.Trim().Equals(profile.TrueConfHost,StringComparison.OrdinalIgnoreCase)?profile.TrueConfFallback:"",TrueConfPort=(int)tcPort.Value,AutoRdp=autoRdp.Checked,AutoTrueConf=autoTc.Checked,ConnectOnOpen=autoConnect.Checked,DnsDomains=dnsDomains.Text.Split([',', ';' ],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries),ExtraHosts=WorkAddresses()};c.Validate();c.PrepareRdp(c.Rdp.Length>0?File.ReadAllText(c.Rdp):"");SaveProfile(c);return c;}
  private void Start()
  {
   if(preview || installingUpdate || worker is not null && !worker.HasExited)return;
@@ -193,14 +159,18 @@ internal sealed partial class MainForm : Form
   if(!active)recovering=false;
   state.Text=status.Stage switch{"connected"=>"VPN подключён","authenticating"=>"Вход в VPN","configuring"=>"Настраиваем сеть…","reconnecting"=>"Восстанавливаем соединение…","disconnecting"=>"Отключаемся…","recovery_required"=>"Нужно восстановить сеть","error"=>"Нет подключения","preparing"=>"Подключаемся…",_=>"VPN отключён"};
   detail.Text=status.Message;
+  detail.Visible=status.Message!="VPN подключён.";
   if(status.Stage=="recovery_required")
    detail.Text=(status.Message+" Откройте «Настройки» и нажмите «Восстановить сеть».").TrimStart();
   var action=ConnectionAction.From(status,active,stopRequested,recovering);
   connect.Text=action.Text;connect.Enabled=action.Enabled&&!installingUpdate;restore.Enabled=!active&&!installingUpdate;
+  StyleConnectionButton(action.StopsSession);
   rdpButton.Enabled=tcButton.Enabled=!stopRequested&&LaunchGate.CanLaunch(status,active);
   foreach(var option in options)option.Enabled=!active&&!installingUpdate;
   bool addressesEditable=!installingUpdate&&(!active||(!stopRequested&&LaunchGate.CanLaunch(status,active)&&workRequestId is null));
-  extra.Enabled=dnsDomains.Enabled=applyWorkAddresses.Enabled=addressesEditable;
+  workAddressInput.Enabled=dnsDomains.Enabled=addressesEditable;
+  RefreshSettingsState(active,addressesEditable);
+  RefreshWorkAddressEditor();
   duration.Text=connectedAt.HasValue&&active?"Время подключения: "+(DateTime.UtcNow-connectedAt.Value).ToString(@"hh\:mm\:ss"):"";
   RefreshTraffic(active);
   if(tray is not null)tray.Text="Forti Split — "+(LaunchGate.CanLaunch(status,active)?"подключён":status.Stage=="recovery_required"?"нужно восстановить сеть":"не подключён");

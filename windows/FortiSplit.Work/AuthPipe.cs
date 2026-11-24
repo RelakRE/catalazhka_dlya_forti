@@ -16,7 +16,7 @@ internal static class AuthPipe
  internal static void VerifyClient(PipeStream pipe,int pid){if(!GetNamedPipeClientProcessId(pipe.SafePipeHandle,out uint actual)||actual!=pid)throw new IOException("Неизвестный процесс авторизации.");}
  internal static async Task<T> Read<T>(Stream stream,CancellationToken token=default){byte[] header=new byte[4];await stream.ReadExactlyAsync(header,token);int length=BinaryPrimitives.ReadInt32LittleEndian(header);if(length is <1 or >65536)throw new IOException("Слишком большая форма входа.");byte[] data=new byte[length];try{await stream.ReadExactlyAsync(data,token);return JsonSerializer.Deserialize<T>(data)??throw new IOException("Пустая форма входа.");}finally{CryptographicOperations.ZeroMemory(data);}}
  internal static async Task Write<T>(Stream stream,T value,CancellationToken token=default){byte[] data=JsonSerializer.SerializeToUtf8Bytes(value);try{if(data.Length>65536)throw new IOException("Слишком большая форма входа.");byte[] header=new byte[4];BinaryPrimitives.WriteInt32LittleEndian(header,data.Length);await stream.WriteAsync(header,token);await stream.WriteAsync(data,token);await stream.FlushAsync(token);}finally{CryptographicOperations.ZeroMemory(data);}}
- internal static AuthSession Login(string id,int parentPid,Config config,Func<bool> cancelled,Action<string>? stage=null,Action<string>? trace=null)
+ internal static AuthSession Login(string id,int parentPid,Config config,Func<bool> cancelled,Action<string,string?>? stage=null,Action<string>? trace=null)
  {
   using var client=new NamedPipeClientStream(".",Name(id),PipeDirection.InOut,PipeOptions.Asynchronous);
   client.Connect(15000);VerifyServer(client,parentPid);

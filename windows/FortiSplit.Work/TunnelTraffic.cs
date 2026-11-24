@@ -7,22 +7,20 @@ internal static class TunnelTraffic
 {
     internal const string AdapterName = "FortiSplitWork";
 
+    internal static NetworkInterface? FindAdapter(Guid? adapterId = null) => NetworkInterface.GetAllNetworkInterfaces()
+        .FirstOrDefault(adapter => string.Equals(adapter.Name, AdapterName, StringComparison.OrdinalIgnoreCase) &&
+            Guid.TryParse(adapter.Id, out var id) && (!adapterId.HasValue || adapterId.Value == id));
+
     internal static TunnelCounters? Read(Guid? adapterId = null)
     {
         try
         {
-            foreach (var adapter in NetworkInterface.GetAllNetworkInterfaces())
-            {
-                if (!string.Equals(adapter.Name, AdapterName, StringComparison.OrdinalIgnoreCase) ||
-                    !Guid.TryParse(adapter.Id, out var id) ||
-                    (adapterId.HasValue && adapterId.Value != id))
-                    continue;
-
-                var stats = adapter.GetIPStatistics();
-                long received = stats.BytesReceived;
-                long sent = stats.BytesSent;
-                return received >= 0 && sent >= 0 ? new(id, received, sent) : null;
-            }
+            var adapter = FindAdapter(adapterId);
+            if (adapter is null) return null;
+            var stats = adapter.GetIPStatistics();
+            long received = stats.BytesReceived;
+            long sent = stats.BytesSent;
+            return received >= 0 && sent >= 0 ? new(Guid.Parse(adapter.Id), received, sent) : null;
         }
         catch (NetworkInformationException)
         {

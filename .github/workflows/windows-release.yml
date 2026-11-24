@@ -24,19 +24,8 @@ jobs:
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: '10.0.x'
-      - name: Audit and source tests
-        run: |
-          ./export-public.ps1 -Destination build/source-audit
-          python audit_public.py build/source-audit
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -B -m unittest test_windows_work test_public_audit
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          dotnet run --project FortiSplit.Work.Checks -c Release
-      - name: Simulated recovery and native network schema
-        shell: powershell
-        run: |
-          ./test_work_network.ps1
-          ./test_work_platform.ps1
+      - name: Verify source, network simulation and native network schema
+        run: ./test-work.ps1 -SourceOnly
       - name: Build archive and verify first-run preparation and native offline tests
         id: package
         run: ./build-release.ps1 -SourceCommit $env:GITHUB_SHA

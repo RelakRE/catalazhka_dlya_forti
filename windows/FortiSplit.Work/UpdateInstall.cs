@@ -18,12 +18,14 @@ internal static class UpdateInstall
  private static bool Equal(string a,string b)=>string.Equals(Path.GetFullPath(a),Path.GetFullPath(b),StringComparison.OrdinalIgnoreCase);
  private static bool Within(string path,string root)=>Path.GetFullPath(path).StartsWith(Path.GetFullPath(root)+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase);
  private static string Hash(string path){using var stream=File.OpenRead(path);return Convert.ToHexString(SHA256.HashData(stream));}
- private static string LinkPath(string origin)=>Path.Combine(Links,Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(origin).ToUpperInvariant())))+".json");
+ private static string LinkPath(string origin)=>LinkPath(origin,Links);
+ internal static string LinkPath(string origin,string links)=>Path.Combine(links,Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(origin).ToUpperInvariant())))+".json");
 
- private static string Origin(string current)
+ private static string Origin(string current)=>Origin(current,Versions);
+ private static string Origin(string current,string versions)
  {
   current=Path.GetFullPath(current);Storage.RegularPath(current);
-  if(Within(current,Versions)){
+  if(Within(current,versions)){
    string marker=Path.Combine(Path.GetDirectoryName(current)!,".fortisplit-origin.json");
    var data=Storage.Read<UpdateMarker>(marker);
    if(!Path.IsPathFullyQualified(data.OriginExe)||!data.OriginExe.EndsWith(".exe",StringComparison.OrdinalIgnoreCase))throw new IOException("Неверные сведения об установке.");
@@ -133,36 +135,45 @@ internal static class UpdateInstall
   }
  }
 
- internal static int Complete(string id)
+ internal static int Complete(string id)=>Complete(id,Updates,GateName,
+  _=>MessageBox.Show("Не удалось завершить обновление. Прежняя версия сохранена.","Forti Split",MessageBoxButtons.OK,MessageBoxIcon.Error),
+  current=>Process.Start(new ProcessStartInfo(current){UseShellExecute=true})?.Dispose());
+
+ internal static int Complete(string id,string updates,string gateName,Action<Exception> reportFailure,Action<string> restart)
  {
   if(!Guid.TryParseExact(id,"N",out _))return 1;
-  string temporary=Path.Combine(Staging,id),version=Path.Combine(Versions,id);
-  using var gate=new Mutex(false,GateName);bool locked=false,parentExited=false;UpdateTicket? ticket=null;
+  string versions=Path.Combine(updates,"versions");
+  string temporary=Path.Combine(updates,"staging",id),version=Path.Combine(versions,id);
+  using var gate=new Mutex(false,gateName);bool locked=false,parentExited=false;UpdateTicket? ticket=null;
   try{
    try{locked=gate.WaitOne(0);}catch(AbandonedMutexException){locked=true;}
    if(!locked)throw new IOException("Уже выполняется обновление.");
    ticket=Storage.Read<UpdateTicket>(Path.Combine(temporary,"ticket.json"));
    string target=Path.Combine(version,"Forti Split.exe");Storage.RegularPath(target);
-   if(!File.Exists(target)||!string.Equals(Hash(target),ticket.TargetSha256,StringComparison.OrdinalIgnoreCase)||!Equal(Origin(ticket.CurrentExe),ticket.OriginExe)||!Equal(Origin(target),ticket.OriginExe))throw new IOException("Не удалось проверить подготовленное обновление.");
+   if(!File.Exists(target)||!string.Equals(Hash(target),ticket.TargetSha256,StringComparison.OrdinalIgnoreCase)||!Equal(Origin(ticket.CurrentExe,versions),ticket.OriginExe)||!Equal(Origin(target,versions),ticket.OriginExe))throw new IOException("Не удалось проверить подготовленное обновление.");
    using(var ready=EventWaitHandle.OpenExisting(@"Local\FortiSplitUpdateReady-"+id))ready.Set();
    try{using var parent=Process.GetProcessById(ticket.ParentId);if(!parent.HasExited&&(parent.StartTime.ToUniversalTime().Ticks!=ticket.ParentTicks||!Equal(parent.MainModule?.FileName??"",ticket.CurrentExe)||!parent.WaitForExit(30000)))throw new IOException("Приложение не завершилось.");}catch(ArgumentException){}parentExited=true;
-   string path=LinkPath(ticket.OriginExe);UpdateLink? previous=File.Exists(path)?Storage.Read<UpdateLink>(path):null;
+   string path=LinkPath(ticket.OriginExe,Path.Combine(updates,"links"));UpdateLink? previous=File.Exists(path)?Storage.Read<UpdateLink>(path):null;
    if(previous?.Pending==true)throw new IOException("Предыдущее обновление не завершено.");
    Storage.Save(path,new UpdateLink(ticket.OriginExe,target,ticket.TargetSha256,true,previous));
    Process? next=null;
    try{
     using var started=new EventWaitHandle(false,EventResetMode.AutoReset,@"Local\FortiSplitUpdateStarted-"+id);
-    var info=new ProcessStartInfo(target){UseShellExecute=false,WorkingDirectory=version};info.Environment["FORTISPLIT_UPDATE_READY"]=id;
+    var info=new ProcessStartInfo(target){UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=version};info.Environment["FORTISPLIT_UPDATE_READY"]=id;
     next=Process.Start(info)??throw new IOException("Не удалось открыть новую версию.");
-    if(!started.WaitOne(TimeSpan.FromSeconds(30)))throw new IOException("Новая версия не открылась.");
+    long start=Stopwatch.GetTimestamp();
+    while(!started.WaitOne(100)){
+     if(next.HasExited)throw new IOException("Новая версия завершилась до запуска.");
+     if(Stopwatch.GetElapsedTime(start).TotalSeconds>=30)throw new IOException("Новая версия не открылась.");
+    }
     Storage.Save(path,new UpdateLink(ticket.OriginExe,target,ticket.TargetSha256));
    }catch{try{if(next is not null&&!next.HasExited){next.Kill();next.WaitForExit();}}catch(Exception){}if(previous is null)File.Delete(path);else Storage.Save(path,previous);throw;}finally{next?.Dispose();}
    gate.ReleaseMutex();locked=false;
    return 0;
-  }catch(Exception){
-   MessageBox.Show("Не удалось завершить обновление. Прежняя версия сохранена.","Forti Split",MessageBoxButtons.OK,MessageBoxIcon.Error);
+  }catch(Exception error){
+   reportFailure(error);
    if(locked){gate.ReleaseMutex();locked=false;}
-   if(parentExited&&ticket is not null)try{Process.Start(new ProcessStartInfo(ticket.CurrentExe){UseShellExecute=true})?.Dispose();}catch(Exception){}
+   if(parentExited&&ticket is not null)try{restart(ticket.CurrentExe);}catch(Exception){}
    return 1;
   }finally{if(locked)gate.ReleaseMutex();}
  }

@@ -6,6 +6,7 @@ namespace FortiSplit.Work;
 
 public sealed record Config
 {
+ internal const int MaxExtraHosts = 32;
  public string Server { get; set; } = "";
  public string User { get; set; } = "";
  public bool RememberPassword { get; set; }
@@ -42,7 +43,7 @@ public sealed record Config
   if (AutoRdp || Rdp.Length > 0) LocalFile(Rdp, ".rdp");
   if (AutoTrueConf || TrueConf.Length > 0) { LocalFile(TrueConf, ".exe"); Host(TrueConfHost); if (TrueConfFallback.Length > 0) IPv4(TrueConfFallback); }
   if (TrueConfPort is < 1 or > 65535) throw new ArgumentException("Неверный порт.");
-  if (ExtraHosts.Length > 32 || Hosts.Length + OptionalHosts.Length > 40) throw new ArgumentException("Слишком много рабочих адресов.");
+  if (ExtraHosts.Length > MaxExtraHosts || Hosts.Length + OptionalHosts.Length > 40) throw new ArgumentException("Слишком много рабочих адресов.");
   foreach (string host in ExtraHosts.Concat(Hosts).Concat(OptionalHosts)) Host(host);
   if(DnsDomains.Length>8)throw new ArgumentException("Слишком много рабочих DNS-доменов.");
   foreach(string domain in DnsDomains){Host(domain);if(IPAddress.TryParse(domain,out _))throw new ArgumentException("Нужен DNS-домен, не IP-адрес.");}
@@ -102,7 +103,7 @@ public sealed record Config
 }
 
 public sealed record TunnelCounters(Guid AdapterId, long Received, long Sent);
-public sealed record Status(string Stage, string Message, bool Ready = false, bool Restored = false, TunnelCounters? TrafficStart = null);
+public sealed record Status(string Stage, string Message, bool Ready = false, bool Restored = false, TunnelCounters? TrafficStart = null, WorkTrafficSnapshot? WorkTraffic = null);
 
 public readonly record struct ConnectionAction(string Text, bool Enabled, bool StopsSession)
 {
@@ -115,6 +116,17 @@ public readonly record struct ConnectionAction(string Text, bool Enabled, bool S
 }
 public sealed record WorkAddressRequest(string Id,string[] ExtraHosts,string[] DnsDomains) {
  public Config ApplyTo(Config current){if(!Guid.TryParseExact(Id,"N",out _))throw new ArgumentException("Неверный запрос рабочих адресов.");return current.WithWorkAddresses(ExtraHosts,DnsDomains);}
+
+ internal WorkAddressResult? ApplyToSession(Config current,Func<bool> sessionActive,Action<Config> configure,Action publishReady)
+ {
+  if(!sessionActive())return null;
+  Config updated;
+  try{updated=ApplyTo(current);}catch(ArgumentException error){return new(Id,false,error.Message);}
+  configure(updated);
+  if(!sessionActive())return null;
+  publishReady();
+  return sessionActive()?new(Id,true,"Рабочие адреса применены."):null;
+ }
 }
 public sealed record WorkAddressResult(string Id,bool Success,string Message);
 public sealed record VpnExitError(string Kind,string Message)

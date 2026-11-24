@@ -37,13 +37,34 @@ internal sealed class AuthFormHistory
 // callback must not restart its deadline or ask for another MFA response.
 public sealed class AuthResponseWait
 {
+ internal const int CodeWaitSeconds=30;
+ private const int StandardWaitMilliseconds=90000;
+ private readonly object gate=new();
  private long deadline;
- private int expired;
- public AuthResponseWait(long now){deadline=now+90000;}
- public bool Expired=>Volatile.Read(ref expired)!=0;
- public bool TryExpire(long now){if(now<Volatile.Read(ref deadline))return false;return Interlocked.CompareExchange(ref expired,1,0)==0;}
- public bool BeginForm(){if(Expired)return false;Volatile.Write(ref deadline,long.MaxValue);return !Expired;}
- public void EndForm(long now){if(!Expired)Volatile.Write(ref deadline,now+90000);}
+ private bool awaitingCode,expired,completed;
+ private AuthFailure? failure;
+ public AuthResponseWait(long now){deadline=now+StandardWaitMilliseconds;}
+ public bool Expired{get{lock(gate)return expired;}}
+ internal AuthFailure? Failure{get{lock(gate)return failure;}}
+ public bool TryExpire(long now){
+  lock(gate){
+   if(completed||failure is not null||now<deadline)return false;
+   expired=true;
+   failure=awaitingCode?new("auth_code_timeout",$"VPN не сообщил результат проверки кода за {CodeWaitSeconds} секунд. Причина неизвестна. "+AuthPolicy.RetryLater)
+    :new("server_timeout","VPN не завершил вход за 90 секунд. Проверьте сеть и подключитесь снова.");
+   return true;
+  }
+ }
+ public bool BeginForm(){lock(gate){if(completed||failure is not null)return false;deadline=long.MaxValue;return true;}}
+ public void EndForm(long now,bool codeSubmitted=false){
+  lock(gate){
+   if(completed||failure is not null)return;
+   awaitingCode=codeSubmitted;
+   deadline=now+(codeSubmitted?CodeWaitSeconds*1000:StandardWaitMilliseconds);
+  }
+ }
+ internal void Abort(AuthFailure error){lock(gate){if(!completed)failure??=error;}}
+ internal AuthFailure? Complete(){lock(gate){completed=true;return failure;}}
 }
 
 public static class AuthPolicy
@@ -55,12 +76,21 @@ public static class AuthPolicy
  internal static AuthFailure? ServerFailure(string? httpEvent,AuthRequest? form=null,string banner="")
  {
   if(httpEvent=="http_429")
-   return new("auth_rate_limited","Сервер VPN ограничил частоту запросов (HTTP 429). "+RetryLater);
+   return TerminalHttpFailure(httpEvent);
   if(IsLockout(form?.Error??"")||IsLockout(form?.Message??"")||IsLockout(banner))
    return new("auth_login_blocked","Сервер VPN временно ограничил вход из-за большого числа попыток. "+RetryLater);
+  if(IsCodeRejection(form?.Error??"")||IsCodeRejection(form?.Message??"")||IsCodeRejection(banner))
+   return new("auth_code_rejected","Сервер VPN отклонил одноразовый код. "+RetryLater);
   // OpenConnect can parse an HTML challenge from either HTTP 401 or HTTP 403.
   if(httpEvent=="http_403" && (form is not { FormId: "unknown", Fields.Length: >0 } || FormCategory(form)=="login"))
    return new("auth_access_denied","Сервер VPN отказал в доступе (HTTP 403). "+RetryLater+" Если отказ повторится, обратитесь в ИТ.");
+  return TerminalHttpFailure(httpEvent);
+ }
+
+ internal static AuthFailure? TerminalHttpFailure(string? httpEvent)
+ {
+  if(httpEvent=="http_429")
+   return new("auth_rate_limited","Сервер VPN ограничил частоту запросов (HTTP 429). "+RetryLater);
   if(httpEvent=="http_405")
    return new("auth_input_rejected","Сервер VPN отклонил данные входа (HTTP 405). "+RetryLater);
   if(httpEvent?.StartsWith("http_5",StringComparison.Ordinal)==true)
@@ -71,6 +101,28 @@ public static class AuthPolicy
  private static bool IsLockout(string text) => new[]{
   "too many bad login attempts","too many failed login attempts","too many login attempts","слишком много попыток входа"
  }.Any(phrase=>text.Contains(phrase,StringComparison.OrdinalIgnoreCase));
+
+ private static bool IsCodeRejection(string text)
+ {
+  text=text.TrimStart();
+  foreach(string prefix in new[]{"error:","ошибка:"})
+   if(text.StartsWith(prefix,StringComparison.OrdinalIgnoreCase)){text=text[prefix.Length..].TrimStart();break;}
+  return new[]{"invalid verification code","incorrect verification code","expired verification code","the verification code is invalid",
+   "invalid otp","incorrect otp","otp has expired","invalid token code","incorrect token code","invalid one-time password",
+   "неверный код подтверждения","неверный одноразовый код","срок действия кода истёк"
+  }.Any(phrase=>text.StartsWith(phrase,StringComparison.OrdinalIgnoreCase));
+ }
+
+ internal static bool IsSubmittedCode(AuthRequest request,AuthReply reply)
+ {
+  if(request.Fields is not [var field]||FormCategory(request)!="challenge"||field.Type is not (1 or 2 or 5)||
+    !reply.Values.TryGetValue(field.Name,out var value)||string.IsNullOrWhiteSpace(value))return false;
+  return field.Type==5||field.Name.ToLowerInvariant() is "code" or "otp" or "tokencode" or "token_code"||
+   field.Label.Trim().TrimEnd(':').ToLowerInvariant() is "code" or "код"||
+   (request.FormId is "unknown" or "_challenge" && value.Length is >=6 and <=8 && value.All(char.IsAsciiDigit))||
+   new[]{"one-time","verification code","security code","fortitoken","однораз","код подтверждения"}
+    .Any(phrase=>(field.Label+" "+request.Message).Contains(phrase,StringComparison.OrdinalIgnoreCase));
+ }
 
  public static string FormCategory(AuthRequest request)
  {

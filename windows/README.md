@@ -5,8 +5,16 @@ through the VPN; the normal internet connection keeps its default route.
 
 The UI provides connect/disconnect, RDP and TrueConf launch, tray status, profile
 import/export and recovery. Login, password and second-factor forms appear in the app.
-Starting with 1.2.8, the Work tab shows incoming and outgoing VPN traffic for the
-current session and the transfer rate in each direction, updated about once a second.
+The Work tab shows VPN totals and transfer rates in both directions. For each
+configured work IP active in the last five seconds, it also shows observed IPv4
+bytes for the session and the latest byte rate, separately for receive and send.
+Names sharing an IP use a single row. Click a work address to open its diagnostics.
+Per-address volumes include the IP headers. The overall totals cover the full VPN
+interface, including traffic to addresses that are absent from the table.
+Each address activity period shows the local date and time of its first and last
+observed packets and the elapsed time between them. More than five seconds of
+inactivity, tunnel reconnection, or disconnect ends the period. The Work tab keeps
+the five most recent completed periods while the app remains open.
 Passwords are saved only when requested, in Windows Credential Manager. OTP values
 and session cookies are never saved in profiles or logs.
 
@@ -42,9 +50,10 @@ Windows x64, .NET SDK 10 and Windows PowerShell 5.1 are required.
 
     dotnet restore FortiSplit.Work/FortiSplit.Work.csproj
     dotnet publish FortiSplit.Work/FortiSplit.Work.csproj -c Release --no-restore -o build/FortiSplit
-    dotnet run --project FortiSplit.Work.Checks -c Release
-    powershell.exe -NoProfile -File test_work_network.ps1
-    python -m unittest test_windows_work
+    ./test-work.ps1
+
+The verification command also requires Python 3. See [TESTING.md](TESTING.md)
+for test reports, source-only checks and Windows 11 VPN acceptance.
 
 Runtime binaries are excluded from this source tree and the release archive.
 The first launch prepares them from upstream automatically; `--prepare-runtime`
@@ -61,11 +70,10 @@ server, local RDP file and optional TrueConf settings in the app or import a pri
 JSON profile. Existing profiles under `%LOCALAPPDATA%\Forti Split Work` are reused.
 Private profile exports end in `.local.json` and must stay outside Git.
 
-`ExtraHosts` can contain DNS names, IPv4 addresses, or a mixture. In Settings,
-expand Advanced and use **Рабочие сайты / имена / IPv4**: the field also accepts
-full HTTP/HTTPS links and stores only their hostnames, ignoring ports and paths.
-Separate entries with commas or newlines. IP addresses do not need to be known in
-advance. JSON profiles retain the existing hostname/IPv4 format. Optional private
+`ExtraHosts` can contain DNS names, IPv4 addresses, or a mixture. Open Settings →
+**Рабочие адреса** and add each entry in **Добавить рабочий адрес**.
+Full HTTP/HTTPS links are accepted and stored as hostnames. JSON profiles retain
+the existing hostname/IPv4 format. Optional private
 DNS suffixes in `DnsDomains` have no leading dot; each explicitly added hostname
 gets its own exact DNS rule even without a suffix. Redirects to another hostname
 require adding that hostname too. Work destinations use IPv4. The VPN gateway
@@ -80,9 +88,10 @@ after 15 seconds; an in-flight QuickTimeout query may finish later. Already
 resolved names are skipped during these retries. An unresolved name does not
 disconnect the VPN and its count appears in the connected status.
 
-While connected, edit just the work names/DNS domains and click **Применить рабочие
-адреса** to save them and resolve their current IPs without reconnecting or entering
-2FA again. The elevated worker validates a bounded address-only request in the
+While connected, edit the work addresses and DNS domains, then use the fixed
+**Применить рабочие адреса** button at the bottom of Settings. This saves them and
+resolves their current IPs without reconnecting or entering 2FA again. The elevated
+worker validates a bounded address-only request in the
 private session directory; it cannot change the VPN server or authentication.
 Replacement routes are added before obsolete session-owned routes are removed.
 An IP shared by another work name or VPN DNS is retained. A temporary DNS failure
@@ -92,11 +101,15 @@ There is no continuous DNS polling or TTL-based refresh; applying addresses or
 reconnecting performs a fresh lookup. Use actual internal values in private
 profiles; public examples remain blank.
 
-The app does not approve or reject RDP destination names or pre-test RDP ports.
 Any selected local RDP file is passed unchanged to mstsc, including short computer
 names and system gateway profiles. Recognizable endpoints are best-effort route
 hints only. DNS failure for a target, gateway or other work endpoint does not stop
 the authenticated VPN tunnel; actual RDP errors are handled by the Windows client.
+While connected, open **Проверить адрес** on the Work tab or select an
+entry in Settings and open **Проверить адрес**. By default **Проверить** looks up
+the Windows route and measures ICMP round-trip time over VPN. To include a TCP
+check, select RD Gateway (443), direct RDP (3389), HTTP/HTTPS, or a custom port.
+The route, ping, and TCP results appear separately.
 Work routes and DNS are configured on connection, actual OpenConnect reconnect,
 bounded retries of unresolved names, and explicit application of work addresses.
 There are no periodic network diagnostics, internet probes or watchdog.
@@ -107,8 +120,10 @@ New sessions record the adapter GUID in a protected journal, so recovery follows
 a renamed tunnel. When recovering a session created by an older build, restore
 the adapter name `FortiSplitWork` first if it has been renamed.
 
-For a fresh installation, open Settings, expand Advanced, set the VPN server and select
-the RDP file. Configure TrueConf if needed. Password/OTP are entered at connection time.
+For a fresh installation, set the server under Settings → **VPN**, then select the
+RDP file and configure TrueConf as needed under **Приложения**. Profiles, network
+recovery, logs, and updates are under **Обслуживание**. Enter the password and OTP
+when connecting.
 Disconnect FortiClient before using this app. A UAC prompt starts the network worker.
 The UI and launched work apps retain ordinary user rights.
 
@@ -125,8 +140,11 @@ anywhere; real addresses and usernames are never embedded in public help sources
 Offline tests cover configuration, native ABI initialization, Credential Manager,
 private IPC and mocked network setup/recovery. They do not prove compatibility with
 every gateway or successful RDP login/video calls. A real login requires user credentials.
-During authentication, network waits are cancelled after 90 seconds; time spent
-entering a password or MFA response in the app is not counted. A timeout permanently
+During authentication, the network wait after submitting a recognized one-time
+code is 30 seconds. Other network waits have a 90-second limit. Time spent entering
+credentials or a code is excluded. An explicit code rejection is shown as soon
+as OpenConnect exposes it. A timeout means the client received no conclusive
+result. A timeout permanently
 ends that authentication attempt: subsequent native callbacks cannot show another
 form or restart the deadline. A failed HTTP response read also stops repeated form
 callbacks instead of asking for another MFA response. A private
@@ -135,8 +153,9 @@ timestamp. `auth-trace.json` retains up to 160 fixed phase/form-category events 
 numeric HTTP status codes, with timestamps; neither file retains form contents,
 credentials, server response bodies, headers or cookies. HTTP status extraction is
 limited to the known upstream printf literal on Windows x64; other progress output
-is discarded. HTTP 429, terminal 403, 405 and 5xx responses and recognized
-login-limit notices have specific messages. An HTML MFA form with input fields
+is discarded. HTTP 429, 405 and 5xx stop the attempt when reported by the native
+HTTP callback. Terminal 403 responses and recognized login-limit notices have
+specific messages. An HTML MFA form with input fields
 can be shown after HTTP 401 or 403. A 403 containing a username/password form
 ends the attempt. OpenConnect reuses identifiers for HTML and
 tokeninfo challenges, so the app allows these forms within the six-step limit

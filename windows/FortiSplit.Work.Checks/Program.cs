@@ -1,5 +1,6 @@
 using FortiSplit.Work;
 using System.Diagnostics;
+using System.Net;
 using System.Text.Json;
 var results=new Dictionary<string,bool>();
 void Check(string name,bool condition)=>results.Add(name,condition);
@@ -55,6 +56,26 @@ Check("traffic_counter_reset_preserves_other_direction", traffic.Measure(baselin
 var recreatedAdapter = new TunnelCounters(Guid.NewGuid(), 0, 0);
 Check("traffic_reconnect_with_new_adapter_keeps_session_total", traffic.Measure(recreatedAdapter, recreatedAdapter with { Received = 50, Sent = 20 }, 6 * second)
     == new TrafficSample(780, 370, null, null));
+var workIp = IPAddress.Parse("192.0.2.10");
+var vpnIp = IPAddress.Parse("192.0.2.20");
+var activityPacket = new byte[32];
+activityPacket[0] = 0x45;
+activityPacket[3] = 28;
+workIp.GetAddressBytes().CopyTo(activityPacket, 12);
+vpnIp.GetAddressBytes().CopyTo(activityPacket, 16);
+uint vpnKey = TunnelActivity.AddressKey(vpnIp);
+uint workKey = TunnelActivity.AddressKey(workIp);
+Check("work_activity_reads_direction_and_ipv4_length", TunnelActivity.ReadPacket(activityPacket, vpnKey) == new TunnelActivity.Packet(workKey, true, 28) &&
+    TunnelActivity.ReadPacket(activityPacket, workKey) == new TunnelActivity.Packet(vpnKey, false, 28));
+Check("work_activity_ignores_unrelated_or_truncated_packets", TunnelActivity.ReadPacket(activityPacket, 0) is null &&
+    TunnelActivity.ReadPacket(activityPacket.AsSpan(0, 27), vpnKey) is null);
+activityPacket[0] = 0x4f;
+Check("work_activity_rejects_invalid_ipv4_header_length", TunnelActivity.ReadPacket(activityPacket, vpnKey) is null);
+var workNetwork = new WorkNetwork(Guid.NewGuid().ToString("B"), 17, "192.0.2.20", "ready",
+    [new("desktop.example.com", ["192.0.2.10"]), new("alias.example.com", ["192.0.2.10"]), new("192.0.2.10", ["192.0.2.10"])]);
+var workPeer = workNetwork.Peers().Single();
+Check("work_activity_groups_shared_addresses_with_all_names", workPeer.Address == "192.0.2.10" &&
+    workPeer.Hosts.SequenceEqual(new[] { "desktop.example.com", "alias.example.com" }));
 const string releaseCatalog="""
 [
  {"tag_name":"v9.0.0","draft":false,"assets":[{"name":"Forti-Split-9.0.0-Windows-x64.zip","state":"uploaded"}]},
@@ -200,6 +221,26 @@ Check("fortinet_lockout_uses_fixed_message",AuthPolicy.ServerFailure("http_403",
  &&blocked.Message.Contains(AuthPolicy.RetryLater)&&!blocked.Message.Contains("Private text"));
 Check("server_errors_have_distinct_causes",AuthPolicy.ServerFailure("http_403")?.Kind=="auth_access_denied"
  &&AuthPolicy.ServerFailure("http_405")?.Kind=="auth_input_rejected"&&AuthPolicy.ServerFailure("http_503")?.Kind=="auth_server_error");
+Check("explicit_otp_rejection_is_recognized_from_the_response_form",AuthPolicy.ServerFailure("http_401",
+ htmlChallenge with {Error="Invalid verification code. Private detail."}) is {Kind:"auth_code_rejected"} reject
+ &&!reject.Message.Contains("Private detail",StringComparison.Ordinal));
+Check("instructions_mentioning_rejection_still_allow_code_entry",AuthPolicy.ServerFailure("http_401",
+ htmlChallenge with {Message="If you have an invalid verification code, request another one."})==null);
+var codeRequest=htmlChallenge with {Fields=[new("code","Code",2,[])]};
+Check("only_submitted_code_uses_short_deadline",AuthPolicy.IsSubmittedCode(codeRequest,new(false,new(){{"code","123456"}}))&&
+ !AuthPolicy.IsSubmittedCode(codeRequest,new(false,new(){{"code",""}}))&&
+ !AuthPolicy.IsSubmittedCode(loginForm,new(false,new(){{fortinetSecret.Name,"123456"}})));
+var genericFortinetChallenge=htmlChallenge with {Fields=[new("credential","Password",2,[])]};
+Check("auth_recognizes_numeric_code_in_generic_fortinet_challenge",AuthPolicy.IsSubmittedCode(genericFortinetChallenge,new(false,new(){{"credential","123456"}}))&&
+ !AuthPolicy.IsSubmittedCode(genericFortinetChallenge,new(false,new(){{"credential",""}})));
+var codeWait=new AuthResponseWait(100);
+codeWait.BeginForm();codeWait.EndForm(1000,codeSubmitted:true);
+Check("auth_silent_code_response_expires_at_thirty_seconds",!codeWait.TryExpire(30999)&&codeWait.TryExpire(31000)&&
+ codeWait.Failure is {Kind:"auth_code_timeout"}&&!codeWait.BeginForm());
+var terminalWait=new AuthResponseWait(100);
+terminalWait.Abort(AuthPolicy.TerminalHttpFailure("http_405")!);
+Check("terminal_http_failure_ends_auth_without_waiting_for_deadline",!terminalWait.BeginForm()&&!terminalWait.TryExpire(100000)&&
+ terminalWait.Complete()?.Kind=="auth_input_rejected"&&AuthPolicy.TerminalHttpFailure("http_401")==null&&AuthPolicy.TerminalHttpFailure("http_403")==null);
 var responseWait=new AuthResponseWait(1000);
 Check("auth_waits_90_seconds_for_response",!responseWait.TryExpire(90999));
 Check("auth_user_input_pauses_network_timeout",responseWait.BeginForm()&&!responseWait.TryExpire(500000));
@@ -214,6 +255,7 @@ Check("session_rejection_distinguishes_setup_from_disconnect",VpnExitError.Descr
 string tunnelRejection=VpnExitError.Describe(2,false).Message;
 Check("post_login_rejection_offers_retry_without_inferred_lockout",tunnelRejection.Contains("Вход подтверждён")&&tunnelRejection.Contains("Попробуйте подключиться ещё раз")&&!tunnelRejection.Contains("двух минут"));
 Check("unknown_exit_does_not_invent_a_cause",VpnExitError.Describe(1,false).Kind=="client_stopped"&&VpnExitError.Describe(1,false).Message.Contains("не определена"));
+await WorkChecks.Run(Check);
 Console.WriteLine(JsonSerializer.Serialize(new{Successful=results.Values.All(x=>x),Checks=results}));
 return results.Values.All(x=>x)?0:1;
 

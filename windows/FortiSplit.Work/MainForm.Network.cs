@@ -5,19 +5,27 @@ namespace FortiSplit.Work;
 internal sealed partial class MainForm
 {
  private static readonly string[] trafficUnits=["Б","КБ","МБ","ГБ","ТБ","ПБ","ЭБ"];
- private readonly Label trafficLabel=new(){Name="vpn-traffic",AccessibleName="Трафик VPN",AutoSize=true,Visible=false,Margin=new Padding(0,3,0,3)};
  private SessionTraffic? trafficSession;
  private long? lastTrafficPoll;
- private readonly Button applyWorkAddresses=Btn("Применить рабочие адреса");
  private string? workRequestId;
 
  private void RefreshTraffic(bool active)
  {
+  if(status.WorkTraffic?.RecentEvents is { Length:>0 } events)
+   lastActivityEvents=events.Concat(lastActivityEvents)
+    .DistinctBy(item=>(item.Peer.Address,item.Activity.StartedUtc,item.Activity.LastActivityUtc))
+    .OrderByDescending(item=>item.Activity.LastActivityUtc).Take(TunnelActivity.HistoryLimit).ToArray();
+  bool ready=!stopRequested&&LaunchGate.CanLaunch(status,active);
+  trafficTitle.Visible=peerHeading.Visible=peerScope.Visible=ready;
   if(!active||stopRequested)trafficSession=null;
-  if(stopRequested||!LaunchGate.CanLaunch(status,active)){
-   trafficLabel.Visible=false;
+  if(!ready){
+   trafficOverview.Visible=trafficUnavailable.Visible=peerColumns.Visible=peerEmpty.Visible=false;
+   var rows=peerRows.Values.ToArray();
+   peerRows.Clear();
+   foreach(var row in rows)row.Dispose();
    lastTrafficPoll=null;
    trafficSession?.Pause();
+   ShowActivityHistory();
    return;
   }
 
@@ -25,20 +33,26 @@ internal sealed partial class MainForm
   if(lastTrafficPoll is long last&&Stopwatch.GetElapsedTime(last,now).TotalMilliseconds<900)return;
   lastTrafficPoll=now;
 
-  trafficLabel.Visible=true;
   if(status.TrafficStart is not { } start||TunnelTraffic.Read(start.AdapterId) is not { } current){
    trafficSession?.Pause();
-   trafficLabel.Text="Статистика трафика VPN недоступна.";
-   return;
+   SetTrafficSummary(null);
   }
-
-  var sample=(trafficSession??=new SessionTraffic()).Measure(start,current,Stopwatch.GetTimestamp());
-  trafficLabel.Text=$"Входящий трафик  {TrafficLine(sample.Received,sample.ReceiveRate)}\n"+
-                    $"Исходящий трафик  {TrafficLine(sample.Sent,sample.SendRate)}";
+  else SetTrafficSummary((trafficSession??=new SessionTraffic()).Measure(start,current,Stopwatch.GetTimestamp()));
+  ShowPeerTraffic(status.WorkTraffic,now);
+  ShowActivityHistory();
  }
 
- private static string TrafficLine(long bytes,double? rate) =>
-  $"{FormatTraffic(bytes)}   ·   {(rate is double speed ? FormatTraffic(speed)+"/с" : "—")}";
+ private void CheckWorkConnection(string? selectedHost=null)
+ {
+  string? session=folder;
+  if(session is null||stopRequested||!LaunchGate.CanLaunch(status,worker is { HasExited:false }))return;
+  var network=Storage.Read<WorkNetwork>(Path.Combine(session,"network.json"));
+  if(network.Stage!="ready")throw new IOException("Дождитесь завершения настройки рабочих адресов.");
+  bool SessionReady()=>folder==session&&!stopRequested&&LaunchGate.CanLaunch(status,worker is { HasExited:false })&&
+   Guid.TryParse(network.Guid,out var adapterId)&&status.TrafficStart?.AdapterId==adapterId;
+  using var dialog=new WorkConnectionDialog(network,SessionReady,selectedHost);
+  dialog.ShowDialog(this);
+ }
 
  private static string FormatTraffic(double bytes)
  {
@@ -47,13 +61,12 @@ internal sealed partial class MainForm
   return $"{bytes:0.#} {trafficUnits[unit]}";
  }
 
- internal void ShowWorkSites(){ShowSettings();advancedToggle.Checked=true;((ScrollableControl)extra.Parent!.Parent!).ScrollControlIntoView(applyWorkAddresses);}
  private void ApplyWorkAddresses()
  {
   bool active=worker is not null&&!worker.HasExited;
   if(!active){Save();settingsNotice.Text="Рабочие адреса сохранены. IP определятся при подключении.";return;}
   if(folder is null||stopRequested||!LaunchGate.CanLaunch(status,true)||workRequestId is not null)throw new IOException("Дождитесь подключения VPN и завершения обновления адресов.");
-  string[] hosts=Config.ParseWorkHosts(extra.Text);
+  string[] hosts=WorkAddresses();
   string[] domains=dnsDomains.Text.Split([',',';','\r','\n',' '],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries);
   var request=new WorkAddressRequest(Guid.NewGuid().ToString("N"),hosts,domains);
   request.ApplyTo(Storage.Read<Config>(Path.Combine(folder,"config.json")));
