@@ -47,7 +47,7 @@ internal static class Worker
   using var identity=WindowsIdentity.GetCurrent();
   if (!new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator)) return 2;
   using var mutex=new Mutex(false,@"Global\FortiSplitWork-Session"); bool locked=false;
-  Process? vpn=null; TunnelActivity? activity=null; bool cleaned=false,scriptsReady=false; string failure="";
+  Process? vpn=null; TunnelPacketMonitor? activity=null; bool cleaned=false,scriptsReady=false; string failure="";
   var peerCounters=new TunnelActivity.RecentPeers();
   try {
    if(recovery){try{using var previousStop=EventWaitHandle.OpenExisting(StopName(id));previousStop.Set();}catch(WaitHandleCannotBeOpenedException){}}

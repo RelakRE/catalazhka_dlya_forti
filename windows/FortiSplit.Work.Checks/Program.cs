@@ -68,7 +68,7 @@ uint workKey = TunnelActivity.AddressKey(workIp);
 Check("work_activity_reads_direction_and_ipv4_length", TunnelActivity.ReadPacket(activityPacket, vpnKey) == new TunnelActivity.Packet(workKey, true, 28) &&
     TunnelActivity.ReadPacket(activityPacket, workKey) == new TunnelActivity.Packet(vpnKey, false, 28));
 Check("work_activity_ignores_unrelated_or_truncated_packets", TunnelActivity.ReadPacket(activityPacket, 0) is null &&
-    TunnelActivity.ReadPacket(activityPacket.AsSpan(0, 27), vpnKey) is null);
+    TunnelActivity.ReadPacket(activityPacket.AsSpan(0, 19), vpnKey) is null);
 activityPacket[0] = 0x4f;
 Check("work_activity_rejects_invalid_ipv4_header_length", TunnelActivity.ReadPacket(activityPacket, vpnKey) is null);
 var workNetwork = new WorkNetwork(Guid.NewGuid().ToString("B"), 17, "192.0.2.20", "ready",

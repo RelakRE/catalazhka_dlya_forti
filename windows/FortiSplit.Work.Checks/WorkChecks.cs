@@ -8,10 +8,45 @@ internal static class WorkChecks
 {
     internal static async Task Run(Action<string, bool> check)
     {
+        CheckCapturedTraffic(check);
         CheckActivity(check);
         CheckActivityHistory(check);
         CheckAddressUpdate(check);
         await CheckProbes(check);
+    }
+
+    private static void CheckCapturedTraffic(Action<string, bool> check)
+    {
+        var peer = new WorkPeer("198.51.100.8", ["work.example.com"]);
+        var local = IPAddress.Parse("192.0.2.20");
+        uint localKey = TunnelActivity.AddressKey(local);
+        var activity = new TunnelActivity.RecentPeers();
+        activity.Replace([peer]);
+        activity.Restart(0);
+
+        byte[] incoming = new byte[96];
+        incoming[0] = 0x45;
+        BinaryPrimitives.WriteUInt16BigEndian(incoming.AsSpan(2), 1200);
+        IPAddress.Parse(peer.Address).GetAddressBytes().CopyTo(incoming, 12);
+        local.GetAddressBytes().CopyTo(incoming, 16);
+        if (TunnelPacketMonitor.ReadFrame(incoming, localKey, TunnelPacketMonitor.IpPayload, TunnelPacketMonitor.ReceiveDirection) is { } received)
+            activity.Observe(received, 0);
+
+        byte[] ethernet = new byte[14 + 60];
+        BinaryPrimitives.WriteUInt16BigEndian(ethernet.AsSpan(12), 0x0800);
+        Span<byte> outgoing = ethernet.AsSpan(14);
+        outgoing[0] = 0x45;
+        BinaryPrimitives.WriteUInt16BigEndian(outgoing[2..], (ushort)outgoing.Length);
+        incoming.AsSpan(16, 4).CopyTo(outgoing[12..]);
+        incoming.AsSpan(12, 4).CopyTo(outgoing[16..]);
+        if (TunnelPacketMonitor.ReadFrame(ethernet, localKey, TunnelPacketMonitor.EthernetPayload, TunnelPacketMonitor.SendDirection) is { } sent)
+            activity.Observe(sent, 0);
+
+        check("work_activity_counts_full_ipv4_volume_from_captured_headers",
+            activity.Snapshot(Stopwatch.Frequency).Peers is [{ Received: 1200, Sent: 60, ReceiveRate: 1200, SendRate: 60 }]);
+        check("work_activity_ignores_non_adapter_and_wrong_direction_events",
+            TunnelPacketMonitor.ReadFrame(incoming, localKey, TunnelPacketMonitor.IpPayload, direction: 1) is null &&
+            TunnelPacketMonitor.ReadFrame(incoming, localKey, TunnelPacketMonitor.IpPayload, TunnelPacketMonitor.SendDirection) is null);
     }
 
     private static void CheckActivity(Action<string, bool> check)

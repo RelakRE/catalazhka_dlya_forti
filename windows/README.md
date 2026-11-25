@@ -11,6 +11,8 @@ bytes for the session and the latest byte rate, separately for receive and send.
 Names sharing an IP use a single row. Click a work address to open its diagnostics.
 Per-address volumes include the IP headers. The overall totals cover the full VPN
 interface, including traffic to addresses that are absent from the table.
+Per-address statistics use the Windows Packet Monitor real-time API and show as
+unavailable when that API cannot capture on the VPN adapter.
 Each address activity period shows the local date and time of its first and last
 observed packets and the elapsed time between them. More than five seconds of
 inactivity, tunnel reconnection, or disconnect ends the period. The Work tab keeps

@@ -26,10 +26,12 @@ unredacted captures in the test environment.
    port and a filtered port. Confirm results distinguish them. Check an IPv4
    outside the VPN and confirm the diagnostic sends no ICMP or TCP to it.
    Close a running diagnostic and repeat with a tunnel disconnect during it.
-4. Generate traffic to a configured work IP. Verify the address appears and
-   expires after traffic stops. Change a work address during the session, then
-   repeat with a tunnel loss during application. Check the UI does not confirm
-   the interrupted change and the next session uses the saved list.
+4. Generate bidirectional traffic to a configured work IP with Windows Firewall
+   enabled. Verify the address appears, its receive and send totals and rates
+   reflect the traffic, and it expires after traffic stops. Change a work address
+   during the session, then repeat with a tunnel loss during application. Check
+   the UI does not confirm the interrupted change and the next session uses the
+   saved list.
 5. Exercise normal disconnect, unexpected VPN loss, sleep/wake and a network
    change. If recovery is required, complete it and reconnect. Compare the
    default route and DNS rules with the first snapshot. Session-owned entries

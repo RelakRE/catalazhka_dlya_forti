@@ -2,69 +2,26 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Net;
 using System.Net.NetworkInformation;
-using System.Net.Sockets;
 using System.Runtime.Versioning;
 
 namespace FortiSplit.Work;
 
-internal sealed class TunnelActivity : IDisposable
+internal static class TunnelActivity
 {
     internal const int RecentSeconds = 5;
     internal const int HistoryLimit = 5;
-    private const int ReceiveAllIpLevel = 3;
-    private readonly Socket socket;
-    private readonly uint localAddress;
-    private readonly RecentPeers recent;
-    private readonly Task receive;
-
-    private TunnelActivity(Socket socket, IPAddress address, RecentPeers recent)
-    {
-        this.socket = socket;
-        this.recent = recent;
-        localAddress = AddressKey(address);
-        recent.Restart(Stopwatch.GetTimestamp());
-        receive = Task.Run(Receive);
-    }
 
     [SupportedOSPlatform("windows")]
-    internal static TunnelActivity? Start(WorkNetwork network, RecentPeers recent)
+    internal static TunnelPacketMonitor? Start(WorkNetwork network, RecentPeers recent)
     {
-        Socket? raw = null;
         try
         {
-            if (network.TunnelAddress() is not { } address) return null;
-
-            raw = new Socket(AddressFamily.InterNetwork, SocketType.Raw, ProtocolType.IP);
-            raw.Bind(new IPEndPoint(address, 0));
-            raw.IOControl(IOControlCode.ReceiveAll, BitConverter.GetBytes(ReceiveAllIpLevel), null);
-            return new TunnelActivity(raw, address, recent);
+            if (!Guid.TryParse(network.Guid, out var adapterId) || network.TunnelAddress() is not { } address) return null;
+            return TunnelPacketMonitor.Start(adapterId, AddressKey(address), recent);
         }
-        catch (Exception error) when (error is SocketException or NetworkInformationException or FormatException)
+        catch (NetworkInformationException)
         {
-            raw?.Dispose();
             return null;
-        }
-    }
-
-    internal bool IsRunning => !receive.IsCompleted;
-
-    private async Task Receive()
-    {
-        byte[] packet = new byte[ushort.MaxValue];
-        try
-        {
-            while (true)
-            {
-                int length = await socket.ReceiveAsync(packet.AsMemory(), SocketFlags.None).ConfigureAwait(false);
-                if (length == 0) return;
-                var observation = ReadPacket(packet.AsSpan(0, length), localAddress);
-                Array.Clear(packet, 0, length);
-                if (observation is { } item) recent.Observe(item, Stopwatch.GetTimestamp());
-            }
-        }
-        catch (Exception error) when (error is SocketException or ObjectDisposedException)
-        {
-            // The VPN interface can disappear. Snapshot reports unavailable.
         }
     }
 
@@ -77,18 +34,13 @@ internal sealed class TunnelActivity : IDisposable
         if (packet.Length < 20 || packet[0] >> 4 != 4) return null;
         int headerLength = (packet[0] & 15) * 4;
         int length = BinaryPrimitives.ReadUInt16BigEndian(packet[2..]);
-        if (headerLength < 20 || length < headerLength || length > packet.Length) return null;
+        // Packet Monitor can deliver only the header. The IPv4 length includes the payload on the wire.
+        if (headerLength < 20 || length < headerLength || packet.Length < headerLength) return null;
         uint source = BinaryPrimitives.ReadUInt32BigEndian(packet[12..]);
         uint destination = BinaryPrimitives.ReadUInt32BigEndian(packet[16..]);
         if (source == destination) return null;
         if (source == local) return new(destination, Incoming: false, length);
         return destination == local ? new(source, Incoming: true, length) : null;
-    }
-
-    public void Dispose()
-    {
-        socket.Dispose();
-        receive.GetAwaiter().GetResult();
     }
 
     internal sealed class RecentPeers
