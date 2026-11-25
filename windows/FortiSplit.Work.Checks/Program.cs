@@ -224,6 +224,9 @@ Check("server_errors_have_distinct_causes",AuthPolicy.ServerFailure("http_403")?
 Check("explicit_otp_rejection_is_recognized_from_the_response_form",AuthPolicy.ServerFailure("http_401",
  htmlChallenge with {Error="Invalid verification code. Private detail."}) is {Kind:"auth_code_rejected"} reject
  &&!reject.Message.Contains("Private detail",StringComparison.Ordinal));
+Check("explicit_otp_expiry_has_its_own_message",AuthPolicy.ServerFailure("http_401",
+ htmlChallenge with {Error="Error: OTP has expired. Private detail."}) is {Kind:"auth_code_expired"} expiredCode
+ &&!expiredCode.Message.Contains("Private detail",StringComparison.Ordinal));
 Check("instructions_mentioning_rejection_still_allow_code_entry",AuthPolicy.ServerFailure("http_401",
  htmlChallenge with {Message="If you have an invalid verification code, request another one."})==null);
 var codeRequest=htmlChallenge with {Fields=[new("code","Code",2,[])]};
@@ -234,11 +237,29 @@ var genericFortinetChallenge=htmlChallenge with {Fields=[new("credential","Passw
 Check("auth_recognizes_numeric_code_in_generic_fortinet_challenge",AuthPolicy.IsSubmittedCode(genericFortinetChallenge,new(false,new(){{"credential","123456"}}))&&
  !AuthPolicy.IsSubmittedCode(genericFortinetChallenge,new(false,new(){{"credential",""}})));
 var codeWait=new AuthResponseWait(100);
+codeWait.RecordHttpResponse("http_401");
 codeWait.BeginForm();codeWait.EndForm(1000,codeSubmitted:true);
 Check("auth_silent_code_response_expires_at_thirty_seconds",!codeWait.TryExpire(30999)&&codeWait.TryExpire(31000)&&
- codeWait.Failure is {Kind:"auth_code_timeout"}&&!codeWait.BeginForm());
+ codeWait.Failure is {Kind:"auth_code_timeout",Message:"Тайм-аут ожидания ответа VPN после отправки кода (30 секунд)."}&&!codeWait.BeginForm());
+var readProblem=AuthPolicy.ProgressFailure("Error reading HTTP response: %s\n")!;
+Check("read_error_after_local_cancellation_does_not_change_timeout",!codeWait.RecordResponseProblem(readProblem)&&
+ codeWait.Complete()?.Kind=="auth_code_timeout");
+Check("known_native_response_errors_have_fixed_messages",
+ AuthPolicy.ProgressFailure("Error fetching chunk header\n")?.Kind=="auth_response_read_failed"&&
+ AuthPolicy.ProgressFailure("Failed to parse HTTP response '%s'\n")?.Kind=="auth_invalid_http_response"&&
+ AuthPolicy.ProgressFailure("Failed to open HTTPS connection to %s\n")?.Kind=="auth_https_connection_failed"&&
+ AuthPolicy.ProgressFailure("Error reading HTTP response: private text\n")==null);
+var earlyReadFailure=new AuthResponseWait(100);
+earlyReadFailure.BeginForm();earlyReadFailure.EndForm(1000,codeSubmitted:true);
+Check("real_read_error_before_timeout_remains_visible",earlyReadFailure.RecordResponseProblem(readProblem)&&
+ earlyReadFailure.TryExpire(31000)&&earlyReadFailure.Complete()?.Kind=="auth_response_read_failed");
+var partialResponse=new AuthResponseWait(100);
+partialResponse.BeginForm();partialResponse.EndForm(1000,codeSubmitted:true);
+Check("new_http_status_after_retry_replaces_old_read_error",
+ partialResponse.RecordResponseProblem(readProblem)&&partialResponse.RecordHttpResponse("http_200")&&partialResponse.TryExpire(31000)&&
+ partialResponse.Failure is {Kind:"auth_code_timeout",Message:"Тайм-аут ожидания ответа VPN после отправки кода (30 секунд). Последний статус VPN — HTTP 200."});
 var terminalWait=new AuthResponseWait(100);
-terminalWait.Abort(AuthPolicy.TerminalHttpFailure("http_405")!);
+terminalWait.RecordHttpResponse("http_405");
 Check("terminal_http_failure_ends_auth_without_waiting_for_deadline",!terminalWait.BeginForm()&&!terminalWait.TryExpire(100000)&&
  terminalWait.Complete()?.Kind=="auth_input_rejected"&&AuthPolicy.TerminalHttpFailure("http_401")==null&&AuthPolicy.TerminalHttpFailure("http_403")==null);
 var responseWait=new AuthResponseWait(1000);

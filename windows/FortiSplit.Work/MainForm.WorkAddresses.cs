@@ -89,7 +89,7 @@ internal sealed partial class MainForm
         workAddressListHeading.Text = workAddresses.Items.Count == 0 ? "Адресов пока нет" : "Добавленные адреса";
         addWorkAddress.Enabled = workAddressInput.Enabled && !string.IsNullOrWhiteSpace(workAddressInput.Text);
         removeWorkAddress.Enabled = workAddressInput.Enabled && selected;
-        checkWorkAddress.Enabled = selected && workRequestId is null && !stopRequested &&
+        checkWorkAddress.Enabled = selected && workRequest is null && !stopRequested &&
             LaunchGate.CanLaunch(status, worker is { HasExited: false });
     }
 }

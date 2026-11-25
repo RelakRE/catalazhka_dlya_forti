@@ -19,6 +19,18 @@ internal static class Storage
   if (!Guid.TryParseExact(id,"N", out _)) throw new ArgumentException("Неверный сеанс.");
   string path = Path.Combine(Root,"sessions",id); RegularPath(path); return path;
  }
+ internal static IEnumerable<string> SessionsWithRecoveryFiles()
+ {
+  string sessions=Path.Combine(Root,"sessions");
+  RegularPath(sessions);
+  if(!Directory.Exists(sessions))yield break;
+  foreach(string path in Directory.EnumerateDirectories(sessions)){
+   string id=Path.GetFileName(path);
+   if(Guid.TryParseExact(id,"N",out _) &&
+      (File.Exists(Path.Combine(path,"network.json"))||File.Exists(Path.Combine(path,"vpn-process.json"))))
+    yield return id.ToLowerInvariant();
+  }
+ }
  internal static void Save(string path, object value)
  {
   RegularPath(path); string tmp=path+".tmp"; RegularPath(tmp);
@@ -26,8 +38,11 @@ internal static class Storage
  }
  internal static T Read<T>(string path)
  {
-  RegularPath(path); if (new FileInfo(path).Length > 1048576) throw new IOException("Слишком большой файл настроек.");
-  return JsonSerializer.Deserialize<T>(File.ReadAllText(path),Config.Json) ?? throw new IOException("Пустые настройки.");
+  RegularPath(path);
+  using var stream=File.Open(path,FileMode.Open,FileAccess.Read,FileShare.Read|FileShare.Delete);
+  if (stream.Length > 1048576) throw new IOException("Слишком большой файл настроек.");
+  using var reader=new StreamReader(stream);
+  return JsonSerializer.Deserialize<T>(reader.ReadToEnd(),Config.Json) ?? throw new IOException("Пустые настройки.");
  }
  internal static void Protect(string folder)
  {

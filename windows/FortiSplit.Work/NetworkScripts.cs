@@ -10,9 +10,20 @@ internal static class NetworkScripts
  private static readonly string BuildId = typeof(NetworkScripts).Module.ModuleVersionId.ToString("N");
  internal static string Hook => Path.Combine(Root, BuildId, "network-hook.js");
  internal static string PowerShellScript => Path.Combine(Root, BuildId, "Network.ps1");
- internal static bool HasJournal(string id) {
-  using var identity = WindowsIdentity.GetCurrent();
-  return File.Exists(Path.Combine(Root, "state", identity.User!.Value + "-" + id + ".json"));
+ internal static string StateDirectory => Path.Combine(Root, "state");
+ internal static string ClientJournal(string sid,string id) => Path.Combine(StateDirectory,sid+"-"+id+".vpn.json");
+ internal static bool HasJournal(string sid,string id) => File.Exists(Path.Combine(StateDirectory,sid+"-"+id+".json"));
+
+ internal static IEnumerable<string> PendingSessions(string directory,string sid)
+ {
+  string prefix=sid+"-";
+  foreach(string path in Directory.EnumerateFiles(directory,prefix+"*.json")){
+   string name=Path.GetFileNameWithoutExtension(path);
+   if(!name.StartsWith(prefix,StringComparison.OrdinalIgnoreCase))continue;
+   string id=name[prefix.Length..];
+   if(id.EndsWith(".vpn",StringComparison.OrdinalIgnoreCase))id=id[..^4];
+   if(System.Guid.TryParseExact(id,"N",out var session))yield return session.ToString("N");
+  }
  }
 
  // Called by the elevated worker under the machine-wide session mutex.

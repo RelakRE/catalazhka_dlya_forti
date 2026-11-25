@@ -1,7 +1,7 @@
 var shell = WScript.CreateObject("WScript.Shell");
 var env = shell.Environment("Process");
 var reason = env("reason");
-if (reason !== "connect" && reason !== "reconnect" && reason !== "disconnect") WScript.Quit(0);
+if (reason !== "connect" && reason !== "attempt-reconnect" && reason !== "reconnect") WScript.Quit(0);
 var fs = WScript.CreateObject("Scripting.FileSystemObject");
 var root = fs.GetParentFolderName(WScript.ScriptFullName);
 var session = env("FORTISPLIT_SESSION");

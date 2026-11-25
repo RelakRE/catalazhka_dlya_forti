@@ -31,6 +31,7 @@ class WorkSafety(unittest.TestCase):
             self.assertNotIn(forbidden, worker)
         ipc = (SRC / 'AuthPipe.cs').read_text(encoding='utf-8')
         self.assertIn('VerifyServer(client,parentPid)', ipc)
+        self.assertIn('TokenImpersonationLevel.Identification', ipc)
         self.assertIn('65536', ipc)
         ui = (SRC / 'MainForm.Auth.cs').read_text(encoding='utf-8')
         self.assertIn('PipeOptions.CurrentUserOnly', ui)
@@ -47,10 +48,28 @@ class WorkSafety(unittest.TestCase):
 
     def test_dns_is_outside_synchronous_hook(self):
         code = (SRC / 'Network.ps1').read_text(encoding='utf-8-sig')
-        hook = code.split("if ($Mode -eq 'Hook') {", 1)[1].split('$script:state=Read-State', 1)[0]
+        hook = code.split("if ($Mode -eq 'Hook') {", 1)[1].split('Get-NetAdapter -InterfaceIndex $script:state.Index', 1)[0]
         self.assertNotIn('Resolve-DnsName', hook)
         self.assertIn('Add-DnsClientNrptRule', hook)
         self.assertLess(hook.index('foreach($name in @($config.Hosts))'), hook.index("Stage='base_ready'"))
+
+    def test_worker_uses_the_same_stop_condition_during_auth_and_tunnel(self):
+        code = (SRC / 'Worker.cs').read_text(encoding='utf-8')
+        self.assertIn('parent is {HasExited:true}', code)
+        self.assertIn('!vpn.HasExited&&!StopRequested()', code)
+        self.assertIn('AuthPipe.Login(id,parentId,config,StopRequested,', code)
+        self.assertIn('if((StopRequested()||cleanupRequired) && scriptsReady)', code)
+        shutdown = code.split('if((StopRequested()||cleanupRequired) && scriptsReady)', 1)[1]
+        self.assertLess(shutdown.index('TryState(folder,"disconnecting"'), shutdown.index('GenerateConsoleCtrlEvent(0,0)'))
+        self.assertLess(shutdown.index('GenerateConsoleCtrlEvent(0,0)'), shutdown.index('Script(folder,"Cleanup")'))
+
+    def test_worker_observes_hook_failures_after_first_connection(self):
+        worker = (SRC / 'Worker.cs').read_text(encoding='utf-8')
+        loop = worker.split('while(SessionActive())', 1)[1]
+        self.assertIn('if(NetworkHookFailed(folder))', loop)
+        self.assertIn('throw NetworkFailure(', loop)
+        hook = (SRC / 'network-hook.js').read_text(encoding='utf-8')
+        self.assertIn('"attempt-reconnect"', hook)
 
     def test_applications_started_only_after_ready(self):
         code = (SRC / 'MainForm.cs').read_text(encoding='utf-8')

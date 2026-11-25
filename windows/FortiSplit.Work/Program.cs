@@ -6,9 +6,11 @@ internal static class Program
  [STAThread] private static int Main(string[] args)
  {
   if(!OperatingSystem.IsWindows() || !Environment.Is64BitProcess) return 2;
-  if(args.Length==4 && args[0]=="--worker" && int.TryParse(args[2],out int pid) && long.TryParse(args[3],out long ticks))
-   return Worker.Run(args[1],pid,ticks,false);
-  if(args.Length==2 && args[0]=="--recover") return Worker.Run(args[1],0,0,true);
+  if(args.Length==4 && args[0] is ("--worker" or "--recover") && Guid.TryParseExact(args[1],"N",out var session) &&
+     int.TryParse(args[2],out int pid) && pid>0 && long.TryParse(args[3],out long ticks)){
+   try{return args[0]=="--worker"?Worker.Run(session.ToString("N"),pid,ticks):Worker.Recover(session.ToString("N"),pid,ticks);}
+   catch(Exception error) when(error is IOException or System.ComponentModel.Win32Exception or InvalidOperationException or ArgumentException or UnauthorizedAccessException){return 2;}
+  }
   ApplicationConfiguration.Initialize();
   if(args.Length==2&&args[0]=="--complete-update")return UpdateInstall.Complete(args[1]);
   if(args.Length==1&&args[0]=="--prepare-runtime"){

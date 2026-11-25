@@ -7,7 +7,7 @@ internal sealed partial class MainForm
  private static readonly string[] trafficUnits=["Б","КБ","МБ","ГБ","ТБ","ПБ","ЭБ"];
  private SessionTraffic? trafficSession;
  private long? lastTrafficPoll;
- private string? workRequestId;
+ private WorkAddressRequest? workRequest;
 
  private void RefreshTraffic(bool active)
  {
@@ -45,10 +45,11 @@ internal sealed partial class MainForm
  private void CheckWorkConnection(string? selectedHost=null)
  {
   string? session=folder;
-  if(session is null||stopRequested||!LaunchGate.CanLaunch(status,worker is { HasExited:false }))return;
+  if(session is null||stopRequested||!LaunchGate.CanLaunch(status,worker is { HasExited:false })||!Worker.NetworkReady(session,status))return;
   var network=Storage.Read<WorkNetwork>(Path.Combine(session,"network.json"));
   if(network.Stage!="ready")throw new IOException("Дождитесь завершения настройки рабочих адресов.");
-  bool SessionReady()=>folder==session&&!stopRequested&&LaunchGate.CanLaunch(status,worker is { HasExited:false })&&
+  bool SessionReady()=>folder==session&&!stopRequested&&LaunchGate.CanLaunch(status,worker is { HasExited:false })&&Worker.NetworkReady(session,status)&&
+   network.Generation==status.NetworkGeneration&&
    Guid.TryParse(network.Guid,out var adapterId)&&status.TrafficStart?.AdapterId==adapterId;
   using var dialog=new WorkConnectionDialog(network,SessionReady,selectedHost);
   dialog.ShowDialog(this);
@@ -65,23 +66,31 @@ internal sealed partial class MainForm
  {
   bool active=worker is not null&&!worker.HasExited;
   if(!active){Save();settingsNotice.Text="Рабочие адреса сохранены. IP определятся при подключении.";return;}
-  if(folder is null||stopRequested||!LaunchGate.CanLaunch(status,true)||workRequestId is not null)throw new IOException("Дождитесь подключения VPN и завершения обновления адресов.");
+  if(folder is null||stopRequested||!LaunchGate.CanLaunch(status,true)||workRequest is not null||!Worker.NetworkReady(folder,status))throw new IOException("Дождитесь подключения VPN и завершения обновления адресов.");
   string[] hosts=WorkAddresses();
   string[] domains=dnsDomains.Text.Split([',',';','\r','\n',' '],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries);
   var request=new WorkAddressRequest(Guid.NewGuid().ToString("N"),hosts,domains);
   request.ApplyTo(Storage.Read<Config>(Path.Combine(folder,"config.json")));
-  SaveProfile(profile.WithWorkAddresses(hosts,domains));
   Storage.Save(Path.Combine(folder,"work-address-request.json"),request);
-  workRequestId=request.Id;settingsNotice.Text="Обновляем адреса рабочих сайтов…";RefreshUi();
+  workRequest=request;settingsNotice.Text="Обновляем адреса рабочих сайтов…";RefreshUi();
  }
  private void CheckWorkAddressResult()
  {
-  if(workRequestId is null||folder is null)return;
+  if(workRequest is not { } request||folder is null)return;
   string path=Path.Combine(folder,"work-address-result.json");
   if(File.Exists(path)){
    var result=Storage.Read<WorkAddressResult>(path);
-   if(result.Id==workRequestId){workRequestId=null;settingsNotice.Text=result.Success?result.Message+" "+status.Message:result.Message;if(!result.Success)MessageBox.Show(result.Message,"Рабочие адреса");}
+   if(result.Id==request.Id){
+    workRequest=null;
+    settingsNotice.Text=result.Message;
+    if(result.Success){
+     try { SaveProfile(profile.WithWorkAddresses(request.ExtraHosts,request.DnsDomains)); }
+     catch(Exception error) when(error is IOException or UnauthorizedAccessException){
+      settingsNotice.Text="Адреса применены в текущем сеансе. Не удалось сохранить профиль.";
+     }
+    }else MessageBox.Show(result.Message,"Рабочие адреса");
+   }
   }
-  if(workRequestId is not null&&(worker is null||worker.HasExited)){workRequestId=null;settingsNotice.Text="Не удалось подтвердить обновление адресов. Проверьте состояние VPN.";}
+  if(workRequest is not null&&(worker is null||worker.HasExited)){workRequest=null;settingsNotice.Text="Не удалось подтвердить обновление адресов. Проверьте состояние VPN.";}
  }
 }

@@ -85,7 +85,7 @@ internal sealed partial class MainForm : Form
  private Config Save(){var c=new Config{Server=server.Text.Trim(),User=user.Text.Trim(),RememberPassword=rememberPassword.Checked,Rdp=rdp.Text.Trim(),TrueConf=tc.Text.Trim(),TrueConfHost=tcHost.Text.Trim(),TrueConfFallback=tcHost.Text.Trim().Equals(profile.TrueConfHost,StringComparison.OrdinalIgnoreCase)?profile.TrueConfFallback:"",TrueConfPort=(int)tcPort.Value,AutoRdp=autoRdp.Checked,AutoTrueConf=autoTc.Checked,ConnectOnOpen=autoConnect.Checked,DnsDomains=dnsDomains.Text.Split([',', ';' ],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries),ExtraHosts=WorkAddresses()};c.Validate();c.PrepareRdp(c.Rdp.Length>0?File.ReadAllText(c.Rdp):"");SaveProfile(c);return c;}
  private void Start()
  {
-  if(preview || installingUpdate || worker is not null && !worker.HasExited)return;
+  if(preview || installingUpdate || recovering || worker is not null && !worker.HasExited)return;
   if(status.Stage=="recovery_required")throw new IOException("Сначала нажмите «Восстановить сеть» и дождитесь подтверждения очистки. Затем подключитесь заново.");
   Config c=Save();string id=Guid.NewGuid().ToString("N");string sessionFolder=Storage.SessionPath(id);
   Storage.Protect(sessionFolder);Storage.Save(Path.Combine(sessionFolder,"config.json"),c);
@@ -102,7 +102,7 @@ internal sealed partial class MainForm : Form
   stop?.Dispose();stop=sessionStop;
   _=ServeAuth(workerId,c);
   trafficSession=null;
-  workRequestId=null;launched=false;stopRequested=false;recovering=false;closing=false;connectedAt=null;status=new("preparing","Подключаем VPN…");RefreshUi();
+  workRequest=null;launched=false;stopRequested=false;recovering=false;closing=false;connectedAt=null;status=new("preparing","Подключаем VPN…");RefreshUi();
  }
  private int StartWorker(ProcessStartInfo info,string sessionFolder)
  {
@@ -110,53 +110,57 @@ internal sealed partial class MainForm : Form
   worker?.Dispose();worker=next;folder=sessionFolder;
   return next.Id;
  }
- private void RequestStop(){if(worker is null || worker.HasExited)return;stopRequested=true;CancelAuth();stop?.Set();status=new("disconnecting","Ожидаем отключения и очистки сети…");RefreshUi();}
+  private void RequestStop(){if(recovering || worker is null || worker.HasExited)return;stopRequested=true;CancelAuth();stop?.Set();status=new("disconnecting","Ожидаем отключения и очистки сети…");RefreshUi();}
  private void Poll()
  {
   if(polling || worker is null)return;polling=true;
   try {
+   bool alive=!worker.HasExited;
    string? path=folder is null?null:Path.Combine(folder,"status.json");
    if(path is not null && File.Exists(path))try{status=Storage.Read<Status>(path);}catch(IOException){}
-   bool alive=!worker.HasExited;
+   if(alive&&folder is not null&&status.Stage=="connected"&&!Worker.NetworkReady(folder,status))
+    status=new("reconnecting","Восстанавливаем соединение и сетевые настройки…",WorkTraffic:status.WorkTraffic);
    if(LaunchGate.CanLaunch(status,alive) && !stopRequested && !launched) {
     launched=true;connectedAt=DateTime.UtcNow;
     Config c=Storage.Read<Config>(Path.Combine(folder!,"config.json"));
     if(c.AutoRdp)LaunchApp(false);if(c.AutoTrueConf)LaunchApp(true);
    }
-   if(!alive && status.Stage is not ("disconnected" or "error" or "recovery_required"))status=new("recovery_required","Не удалось подтвердить восстановление сети.");
+    if(!alive)CompleteWorker(worker.ExitCode);
    CheckWorkAddressResult();RefreshUi();if(closing && !alive){closing=false;Close();}
   }catch(Exception e){detail.Text=e.Message;}finally{polling=false;}
  }
  private void LaunchApp(bool trueconf)
  {
-  if(folder is null || stopRequested || !LaunchGate.CanLaunch(status,worker is not null&&!worker.HasExited))throw new IOException("Сначала дождитесь подключения VPN.");
+  if(folder is null || stopRequested || !LaunchGate.CanLaunch(status,worker is not null&&!worker.HasExited) || !Worker.NetworkReady(folder,status))throw new IOException("Сначала дождитесь подключения VPN.");
   Config c=Storage.Read<Config>(Path.Combine(folder,"config.json"));
   if(trueconf){Config.LocalFile(c.TrueConf,".exe");if(!Process.GetProcessesByName(Path.GetFileNameWithoutExtension(c.TrueConf)).Any())Process.Start(new ProcessStartInfo(c.TrueConf){UseShellExecute=true})?.Dispose();}
   else{Config.LocalFile(c.Rdp,".rdp");var info=new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),"System32","mstsc.exe")){UseShellExecute=false};info.ArgumentList.Add(c.Rdp);Process.Start(info)?.Dispose();}
  }
  private void Recover()
  {
-  if(worker is not null&&!worker.HasExited)throw new IOException("Сначала отключите текущий VPN-сеанс.");
-  string sessions=Path.Combine(Storage.Root,"sessions");
-  var pending=Directory.Exists(sessions)?Directory.EnumerateFiles(sessions,"*.json",SearchOption.AllDirectories).Where(p=>Path.GetFileName(p) is "network.json" or "vpn-process.json").GroupBy(Path.GetDirectoryName).Select(g=>g.First()).OrderBy(File.GetLastWriteTimeUtc).ToArray():[];
-  if(pending.Length==0){
-   FinishEmptyRecovery();MessageBox.Show(status.Message,Text);return;
-  }
-  string sessionFolder=Path.GetDirectoryName(pending[0])!;string id=Path.GetFileName(sessionFolder);Storage.SessionPath(id);
-  var info=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=true,Verb="runas",WindowStyle=ProcessWindowStyle.Hidden};info.ArgumentList.Add("--recover");info.ArgumentList.Add(id);
-  StartWorker(info,sessionFolder);recovering=true;status=new("disconnecting","Восстанавливаем сеть…");launched=true;RefreshUi();
+   if(recovering || worker is not null&&!worker.HasExited)throw new IOException("Сначала отключите текущий VPN-сеанс.");
+   string id=Guid.NewGuid().ToString("N"),resultFolder=Storage.SessionPath(id);
+   Storage.Protect(resultFolder);
+   using var self=Process.GetCurrentProcess();
+   var info=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=true,Verb="runas",WindowStyle=ProcessWindowStyle.Hidden};
+   foreach(var arg in new[]{"--recover",id,self.Id.ToString(),self.StartTime.ToUniversalTime().Ticks.ToString()})info.ArgumentList.Add(arg);
+   StartWorker(info,resultFolder);
+   stop?.Dispose();stop=null;stopRequested=false;workRequest=null;connectedAt=null;
+   recovering=true;status=new("disconnecting","Восстанавливаем сеть…");launched=true;RefreshUi();
  }
- private void FinishEmptyRecovery()
+  private void CompleteWorker(int exitCode)
  {
-  worker?.Dispose();worker=null;stop?.Dispose();stop=null;
-  recovering=stopRequested=false;connectedAt=null;
-  status=new("disconnected","Незавершённых сетевых изменений не найдено.",Restored:true);
-  RefreshUi();
+   if(exitCode==Worker.AccountMismatchExitCode){
+    status=new(recovering?"recovery_required":"error",Worker.AccountMismatchMessage);
+    CancelAuth();
+    worker?.Dispose();worker=null;stop?.Dispose();stop=null;
+   }else if(status.Stage is not ("disconnected" or "error" or "recovery_required"))
+    status=new("recovery_required","Не удалось подтвердить восстановление сети.");
+   recovering=false;
  }
  private void OpenLog(){string path=folder??Storage.Root;var info=new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),"explorer.exe")){UseShellExecute=true};info.ArgumentList.Add(path);Process.Start(info)?.Dispose();}
  private void RefreshUi(){
-  bool active=worker is not null&&!worker.HasExited;
-  if(!active)recovering=false;
+  bool active=recovering||worker is not null&&!worker.HasExited;
   state.Text=status.Stage switch{"connected"=>"VPN подключён","authenticating"=>"Вход в VPN","configuring"=>"Настраиваем сеть…","reconnecting"=>"Восстанавливаем соединение…","disconnecting"=>"Отключаемся…","recovery_required"=>"Нужно восстановить сеть","error"=>"Нет подключения","preparing"=>"Подключаемся…",_=>"VPN отключён"};
   detail.Text=status.Message;
   detail.Visible=status.Message!="VPN подключён.";
@@ -167,7 +171,7 @@ internal sealed partial class MainForm : Form
   StyleConnectionButton(action.StopsSession);
   rdpButton.Enabled=tcButton.Enabled=!stopRequested&&LaunchGate.CanLaunch(status,active);
   foreach(var option in options)option.Enabled=!active&&!installingUpdate;
-  bool addressesEditable=!installingUpdate&&(!active||(!stopRequested&&LaunchGate.CanLaunch(status,active)&&workRequestId is null));
+  bool addressesEditable=!installingUpdate&&(!active||(!stopRequested&&LaunchGate.CanLaunch(status,active)&&workRequest is null));
   workAddressInput.Enabled=dnsDomains.Enabled=addressesEditable;
   RefreshSettingsState(active,addressesEditable);
   RefreshWorkAddressEditor();

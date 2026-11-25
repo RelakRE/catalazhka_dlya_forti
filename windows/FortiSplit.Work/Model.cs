@@ -103,7 +103,7 @@ public sealed record Config
 }
 
 public sealed record TunnelCounters(Guid AdapterId, long Received, long Sent);
-public sealed record Status(string Stage, string Message, bool Ready = false, bool Restored = false, TunnelCounters? TrafficStart = null, WorkTrafficSnapshot? WorkTraffic = null);
+public sealed record Status(string Stage, string Message, bool Ready = false, bool Restored = false, TunnelCounters? TrafficStart = null, WorkTrafficSnapshot? WorkTraffic = null, string? NetworkGeneration = null);
 
 public readonly record struct ConnectionAction(string Text, bool Enabled, bool StopsSession)
 {

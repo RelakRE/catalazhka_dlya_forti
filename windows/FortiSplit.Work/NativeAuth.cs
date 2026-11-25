@@ -56,8 +56,6 @@ internal static class NativeAuth
   // Bound only network waits. The user may take as long as needed to enter MFA.
   var responseWait=new AuthResponseWait(Environment.TickCount64);
   var forms=new AuthFormHistory();
-  string? httpEvent=null;
-  bool responseFailed=false;
   IOException Stop(AuthFailure failure)
   {
    trace?.Invoke(failure.Kind);
@@ -68,14 +66,11 @@ internal static class NativeAuth
    try {
     string formatText=Text(format,128);
     if(formatText=="Got HTTP response: %s\n") {
-     httpEvent=AuthPolicy.HttpEvent(Text(firstArgument,128));
-     if(httpEvent is not null){
-      responseFailed=false;
-      if(AuthPolicy.TerminalHttpFailure(httpEvent) is { } terminal)responseWait.Abort(terminal);
+     if(AuthPolicy.HttpEvent(Text(firstArgument,128)) is { } httpEvent&&responseWait.RecordHttpResponse(httpEvent))
       trace?.Invoke(httpEvent);
-     }
     }
-    else if(formatText is "Error reading HTTP response: %s\n" or "Error reading HTTP response body\n") {responseFailed=true;trace?.Invoke("response_read_failed");}
+    else if(AuthPolicy.ProgressFailure(formatText) is { } problem&&responseWait.RecordResponseProblem(problem))
+     trace?.Invoke(problem.Kind);
    }catch(Exception){ /* Diagnostics must never unwind a native callback. */ }
   };
   FormCallback formCallback=(_,pointer)=> {
@@ -94,8 +89,10 @@ internal static class NativeAuth
      fields.Add(new(name,Text(option.Label,512),option.Type,choices.ToArray()));options.Add(current);
     }
     var request=new AuthRequest("form",message,error,fields.ToArray(),Text(form.Id,256));
-    if(AuthPolicy.ServerFailure(httpEvent,request,Text(form.Banner,1024)) is { } serverFailure){responseWait.Abort(serverFailure);return -1;}
-    if(responseFailed)throw Stop(AuthPolicy.ReadFailure);
+    if((AuthPolicy.ServerFailure(responseWait.HttpEvent,request,Text(form.Banner,1024))??responseWait.ResponseProblem) is { } serverFailure){
+     responseWait.Abort(serverFailure);
+     return -1;
+    }
     if(fields.Count==0)return 0;
     trace?.Invoke("form_"+AuthPolicy.FormCategory(request));
     if(forms.Next(request,out int attempt) is { } formFailure)throw Stop(formFailure);
@@ -105,7 +102,6 @@ internal static class NativeAuth
     AuthReply reply=ask(request);
     if(reply.Cancelled||cancelled()||responseWait.Failure is not null)return 1;
     for(int i=0;i<fields.Count;i++){if(!reply.Values.TryGetValue(fields[i].Name,out string? value)||value.Length>4096||value.Contains('\0'))throw new IOException("Неверный ответ формы.");if(openconnect_set_option_value(options[i],value)!=0)throw new IOException("Не удалось заполнить форму.");}
-    httpEvent=null;
     bool codeSubmitted=AuthPolicy.IsSubmittedCode(request,reply);
     stage?.Invoke(codeSubmitted?"code_submitted":"form_submitted",null);
     responseWait.EndForm(Environment.TickCount64,codeSubmitted);
@@ -140,10 +136,13 @@ internal static class NativeAuth
     if(rejectedCertificate)throw new IOException("Сертификат VPN не прошёл проверку. Подключение остановлено.");
     if(callbackFailure is not null)throw new IOException(callbackFailure.Message,callbackFailure);
     if(cancelled()||result==1)throw new OperationCanceledException();
+    if(responseWait.ResponseProblem is { } problem)throw Stop(problem);
+    string? httpEvent=responseWait.HttpEvent;
     if(AuthPolicy.ServerFailure(httpEvent) is { } serverFailure)throw Stop(serverFailure);
-    if(responseFailed)throw Stop(AuthPolicy.ReadFailure);
     if(httpEvent=="http_401")throw Stop(new("auth_not_authorized","Сервер VPN не подтвердил вход (HTTP 401). "+AuthPolicy.RetryLater));
-    throw new IOException($"VPN не завершил вход (код OpenConnect {result}). Причина неизвестна. "+AuthPolicy.RetryLater);
+    if(httpEvent?.StartsWith("http_4",StringComparison.Ordinal)==true)
+     throw Stop(new("auth_http_error",$"Вход в VPN завершился ошибкой HTTP {httpEvent[5..]}."));
+    throw Stop(new("auth_client_error",$"Ошибка входа в VPN (код OpenConnect {result})."));
    }
    string cookie=Text(openconnect_get_cookie(info),65536),url=Text(openconnect_get_connect_url(info)),dns=Text(openconnect_get_dnsname(info)),address=Text(openconnect_get_hostname(info));
    if(cookie.Length==0||cookie.Contains('\n')||cookie.Contains('\r'))throw new IOException("VPN не выдал сеанс входа.");

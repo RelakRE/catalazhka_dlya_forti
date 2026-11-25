@@ -21,7 +21,8 @@ public sealed record WorkTrafficSnapshot(long Timestamp, WorkPeerTraffic[] Peers
 
 internal sealed record ResolvedWorkHost(string Host, string[] Addresses);
 
-internal sealed record WorkNetwork(string Guid, uint Index, string Address, string Stage, ResolvedWorkHost[]? Resolved)
+internal sealed record WorkNetwork(string Guid, uint Index, string Address, string Stage, ResolvedWorkHost[]? Resolved,
+    string? Generation = null, string[]? Unresolved = null, string[]? Deferred = null)
 {
     internal IPAddress? TunnelAddress()
     {

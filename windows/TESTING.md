@@ -30,10 +30,11 @@ unredacted captures in the test environment.
    enabled. Verify the address appears, its receive and send totals and rates
    reflect the traffic, and it expires after traffic stops. Change a work address
    during the session, then repeat with a tunnel loss during application. Check
-   the UI does not confirm the interrupted change and the next session uses the
-   saved list.
-5. Exercise normal disconnect, unexpected VPN loss, sleep/wake and a network
-   change. If recovery is required, complete it and reconnect. Compare the
+   the UI reports success only after applying the new configuration. Verify the
+   profile still contains the last successfully applied list after a failed change.
+5. Exercise normal disconnect, forced GUI exit, unexpected VPN loss, sleep/wake
+   and a network change. Check that VPN readiness returns after route and DNS
+   setup completes. If recovery is required, complete it and reconnect. Compare the
    default route and DNS rules with the first snapshot. Session-owned entries
    should be removed and unrelated entries should remain.
 6. Update a disposable copy from an older supported build and confirm the

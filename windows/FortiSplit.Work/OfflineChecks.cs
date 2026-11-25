@@ -97,7 +97,7 @@ internal static class OfflineChecks
     string name="FortiSplitOffline-"+Guid.NewGuid().ToString("N");
     using var server=new NamedPipeServerStream(name,PipeDirection.InOut,1,PipeTransmissionMode.Byte,PipeOptions.Asynchronous|PipeOptions.CurrentUserOnly);
     pipeStage="create_client";
-    using var client=new NamedPipeClientStream(".",name,PipeDirection.InOut,PipeOptions.Asynchronous);
+     using var client=AuthPipe.OpenClient(name);
     using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(5));
     pipeStage="connect";
     await Task.WhenAll(server.WaitForConnectionAsync(timeout.Token),client.ConnectAsync(timeout.Token));
@@ -126,6 +126,9 @@ internal static class OfflineChecks
   string recoveryTest=Path.Combine(Path.GetTempPath(),"FortiSplitRecoveryCheck-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(recoveryTest);
   try{
    using var identity=System.Security.Principal.WindowsIdentity.GetCurrent();
+   var otherSid=new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.NullSid,null);
+   checks["worker_checks_parent_user_sid"]=Worker.ProcessUsesAccount(Environment.ProcessId,identity.User!) &&
+    !Worker.ProcessUsesAccount(Environment.ProcessId,otherSid);
    bool elevated=new System.Security.Principal.WindowsPrincipal(identity).IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
    string scriptRoot=Path.Combine(recoveryTest,"hooks");
    if(elevated){
@@ -144,6 +147,17 @@ internal static class OfflineChecks
    try{Worker.StopSavedClient(recoveryTest);checks["manual_recovery_refuses_own_process"]=false;}catch(IOException){checks["manual_recovery_refuses_own_process"]=true;}
    Storage.Save(Path.Combine(recoveryTest,"vpn-process.json"),new{Id=int.MaxValue,StartTicks=0L,Image=image});
    Worker.StopSavedClient(recoveryTest);checks["manual_recovery_handles_missing_process"]=true;
+   string journal=Path.Combine(recoveryTest,"journals");
+   Directory.CreateDirectory(journal);
+   string orphanId=Guid.NewGuid().ToString("N"),sid=identity.User!.Value;
+   File.WriteAllText(Path.Combine(journal,sid+"-"+orphanId+".json"),"{}");
+   string processJournal=Path.Combine(journal,sid+"-"+orphanId+".vpn.json");
+   Storage.Save(processJournal,new{Id=Environment.ProcessId,StartTicks=0L,Image=image});
+   File.WriteAllText(Path.Combine(journal,otherSid.Value+"-"+Guid.NewGuid().ToString("N")+".json"),"{}");
+   checks["recovery_discovers_protected_orphan_for_current_user"]=NetworkScripts.PendingSessions(journal,sid)
+    .Distinct().SequenceEqual(new[]{orphanId}) && !Directory.Exists(Path.Combine(recoveryTest,orphanId));
+   try{Worker.StopSavedClient(Path.Combine(recoveryTest,orphanId),processJournal);checks["orphan_recovery_reads_protected_process_identity"]=false;}
+   catch(IOException){checks["orphan_recovery_reads_protected_process_identity"]=true;}
   }catch(Exception error){RecordFailure("manual_recovery_handles_missing_process","verify_recovery",error);}
   finally{try{Directory.Delete(recoveryTest,true);}catch{}}
   foreach(bool previous in new[]{false,true}){
@@ -175,7 +189,14 @@ internal sealed partial class MainForm
   }finally{worker=null;folder=null;}
   status=new("recovery_required","");stopRequested=true;RefreshUi();
   bool blocked=!connect.Enabled;
-  FinishEmptyRecovery();Poll();
+  status=new("disconnected","",Restored:true);CompleteWorker(0);RefreshUi();
   checks["empty_recovery_enables_connect"]=blocked && connect.Enabled && status.Restored && status.Stage=="disconnected";
+  status=new("preparing","");stopRequested=false;
+  CompleteWorker(Worker.AccountMismatchExitCode);RefreshUi();
+  checks["different_admin_account_reports_connection_error"]=connect.Enabled && status.Stage=="error" &&
+   status.Message==Worker.AccountMismatchMessage;
+  recovering=true;status=new("disconnecting","");
+  CompleteWorker(Worker.AccountMismatchExitCode);RefreshUi();
+  checks["different_admin_account_keeps_recovery_required"]=!connect.Enabled && status.Stage=="recovery_required";
  }
 }

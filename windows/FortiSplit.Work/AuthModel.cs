@@ -42,16 +42,39 @@ public sealed class AuthResponseWait
  private readonly object gate=new();
  private long deadline;
  private bool awaitingCode,expired,completed;
+ private string? httpEvent;
+ private AuthFailure? responseProblem;
  private AuthFailure? failure;
  public AuthResponseWait(long now){deadline=now+StandardWaitMilliseconds;}
  public bool Expired{get{lock(gate)return expired;}}
  internal AuthFailure? Failure{get{lock(gate)return failure;}}
+ internal string? HttpEvent{get{lock(gate)return httpEvent;}}
+ internal AuthFailure? ResponseProblem{get{lock(gate)return responseProblem;}}
+ internal bool RecordHttpResponse(string evt){
+  lock(gate){
+   if(completed||failure is not null)return false;
+   httpEvent=evt;
+   responseProblem=null;
+   failure=AuthPolicy.TerminalHttpFailure(evt);
+   return true;
+  }
+ }
+ internal bool RecordResponseProblem(AuthFailure problem){
+  lock(gate){
+   // Cancelling a blocked read after the deadline can itself emit a read error.
+   if(completed||failure is not null)return false;
+   responseProblem=problem;
+   return true;
+  }
+ }
  public bool TryExpire(long now){
   lock(gate){
    if(completed||failure is not null||now<deadline)return false;
    expired=true;
-   failure=awaitingCode?new("auth_code_timeout",$"VPN не сообщил результат проверки кода за {CodeWaitSeconds} секунд. Причина неизвестна. "+AuthPolicy.RetryLater)
-    :new("server_timeout","VPN не завершил вход за 90 секунд. Проверьте сеть и подключитесь снова.");
+   string status=httpEvent is null?"":$" Последний статус VPN — HTTP {httpEvent[5..]}.";
+   failure=responseProblem??(awaitingCode
+    ?new("auth_code_timeout",$"Тайм-аут ожидания ответа VPN после отправки кода ({CodeWaitSeconds} секунд)."+status)
+    :new("server_timeout",$"Тайм-аут ожидания ответа VPN ({StandardWaitMilliseconds/1000} секунд)."+status));
    return true;
   }
  }
@@ -60,6 +83,8 @@ public sealed class AuthResponseWait
   lock(gate){
    if(completed||failure is not null)return;
    awaitingCode=codeSubmitted;
+   httpEvent=null;
+   responseProblem=null;
    deadline=now+(codeSubmitted?CodeWaitSeconds*1000:StandardWaitMilliseconds);
   }
  }
@@ -70,8 +95,19 @@ public sealed class AuthResponseWait
 public static class AuthPolicy
 {
  internal const string RetryLater="Подождите около двух минут перед новой попыткой.";
- internal static readonly AuthFailure ReadFailure=new("auth_response_read_failed",
-  "Соединение прервалось при чтении ответа VPN. Проверьте сеть и подключитесь снова.");
+
+ // OpenConnect 9.21 http.c. Inspect the fixed printf format only.
+ internal static AuthFailure? ProgressFailure(string format) => format switch
+ {
+  "Error reading HTTP response: %s\n" or "Error reading HTTP response body\n" or
+  "Error fetching chunk header\n" or "Error fetching HTTP response body\n" =>
+   new("auth_response_read_failed","Не удалось прочитать ответ VPN. Проверьте сеть и подключитесь снова."),
+  "Failed to parse HTTP response '%s'\n" =>
+   new("auth_invalid_http_response","VPN вернул некорректный HTTP-ответ."),
+  "Failed to open HTTPS connection to %s\n" =>
+   new("auth_https_connection_failed","Не удалось установить HTTPS-соединение с VPN."),
+  _=>null
+ };
 
  internal static AuthFailure? ServerFailure(string? httpEvent,AuthRequest? form=null,string banner="")
  {
@@ -79,8 +115,8 @@ public static class AuthPolicy
    return TerminalHttpFailure(httpEvent);
   if(IsLockout(form?.Error??"")||IsLockout(form?.Message??"")||IsLockout(banner))
    return new("auth_login_blocked","Сервер VPN временно ограничил вход из-за большого числа попыток. "+RetryLater);
-  if(IsCodeRejection(form?.Error??"")||IsCodeRejection(form?.Message??"")||IsCodeRejection(banner))
-   return new("auth_code_rejected","Сервер VPN отклонил одноразовый код. "+RetryLater);
+  if((CodeFailure(form?.Error??"")??CodeFailure(form?.Message??"")??CodeFailure(banner)) is { } codeFailure)
+   return codeFailure;
   // OpenConnect can parse an HTML challenge from either HTTP 401 or HTTP 403.
   if(httpEvent=="http_403" && (form is not { FormId: "unknown", Fields.Length: >0 } || FormCategory(form)=="login"))
    return new("auth_access_denied","Сервер VPN отказал в доступе (HTTP 403). "+RetryLater+" Если отказ повторится, обратитесь в ИТ.");
@@ -102,15 +138,20 @@ public static class AuthPolicy
   "too many bad login attempts","too many failed login attempts","too many login attempts","слишком много попыток входа"
  }.Any(phrase=>text.Contains(phrase,StringComparison.OrdinalIgnoreCase));
 
- private static bool IsCodeRejection(string text)
+ private static AuthFailure? CodeFailure(string text)
  {
   text=text.TrimStart();
   foreach(string prefix in new[]{"error:","ошибка:"})
    if(text.StartsWith(prefix,StringComparison.OrdinalIgnoreCase)){text=text[prefix.Length..].TrimStart();break;}
-  return new[]{"invalid verification code","incorrect verification code","expired verification code","the verification code is invalid",
-   "invalid otp","incorrect otp","otp has expired","invalid token code","incorrect token code","invalid one-time password",
-   "неверный код подтверждения","неверный одноразовый код","срок действия кода истёк"
-  }.Any(phrase=>text.StartsWith(phrase,StringComparison.OrdinalIgnoreCase));
+  if(new[]{"expired verification code","otp has expired","срок действия кода истёк"}
+    .Any(phrase=>text.StartsWith(phrase,StringComparison.OrdinalIgnoreCase)))
+   return new("auth_code_expired","Срок действия одноразового кода истёк. "+RetryLater);
+  if(new[]{"invalid verification code","incorrect verification code","the verification code is invalid",
+    "invalid otp","incorrect otp","invalid token code","incorrect token code","invalid one-time password",
+    "неверный код подтверждения","неверный одноразовый код"
+   }.Any(phrase=>text.StartsWith(phrase,StringComparison.OrdinalIgnoreCase)))
+   return new("auth_code_rejected","Сервер VPN отклонил одноразовый код. "+RetryLater);
+  return null;
  }
 
  internal static bool IsSubmittedCode(AuthRequest request,AuthReply reply)

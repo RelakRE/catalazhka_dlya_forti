@@ -39,9 +39,8 @@ internal sealed partial class MainForm
  {
   if(installingUpdate||availableUpdate?.CanInstall!=true)return;
   if(worker is not null&&!worker.HasExited){updateInfo.Text="Сначала отключите VPN.";return;}
-  string sessions=Path.Combine(Storage.Root,"sessions");
   try{
-   if(status.Stage=="recovery_required"||(Directory.Exists(sessions)&&Directory.EnumerateFiles(sessions,"*.json",SearchOption.AllDirectories).Any(p=>Path.GetFileName(p) is "network.json" or "vpn-process.json"))){updateInfo.Text="Сначала восстановите сеть.";return;}
+   if(status.Stage=="recovery_required"||Storage.SessionsWithRecoveryFiles().Any()){updateInfo.Text="Сначала восстановите сеть.";return;}
    installingUpdate=true;installUpdate.Enabled=false;updateInfo.Text="Скачиваем и проверяем обновление…";RefreshUi();
    await UpdateInstall.Stage(availableUpdate,updateStop.Token);
    if(IsDisposed||updateStop.IsCancellationRequested)return;

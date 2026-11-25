@@ -83,22 +83,24 @@ hostname can resolve to IPv4 or IPv6.
 
 VPN DNS routes, optional literal IP routes and work-name/domain DNS rules are
 installed before any tunnel DNS query. DNS lookup runs after the synchronous
-OpenConnect hook and uses the VPN's DNS servers for every attempt. Missing
-names get up to three additional attempts, after 3, 10
-and 30 seconds from the preceding attempt. A lookup pass stops starting queries
-after 15 seconds; an in-flight QuickTimeout query may finish later. Already
-resolved names are skipped during these retries. An unresolved name does not
+OpenConnect hook and uses the VPN's DNS servers for every attempt. A lookup pass
+stops starting queries 15 seconds after its first query. An in-flight QuickTimeout
+query may finish later. The next pass processes names that have yet to receive
+their first query. Once those queries have run, unresolved names get up to three
+additional attempts after 3, 10 and 30 seconds. An unresolved name does not
 disconnect the VPN and its count appears in the connected status.
 
 While connected, edit the work addresses and DNS domains, then use the fixed
-**Применить рабочие адреса** button at the bottom of Settings. This saves them and
-resolves their current IPs without reconnecting or entering 2FA again. The elevated
-worker validates a bounded address-only request in the
+**Применить рабочие адреса** button at the bottom of Settings. This resolves their
+current IPs without reconnecting or entering 2FA again and saves the profile after
+the network update succeeds. The elevated worker validates a bounded request in the
 private session directory; it cannot change the VPN server or authentication.
 Replacement routes are added before obsolete session-owned routes are removed.
 An IP shared by another work name or VPN DNS is retained. A temporary DNS failure
 keeps that name's previous routes; deleting the name explicitly removes routes
-no longer needed elsewhere. Disconnect/recovery removes all session-owned changes.
+no longer needed elsewhere. The app checks the 256-route limit before changing the
+table. If an update fails, it attempts to restore the previous routes and DNS rules.
+Disconnect/recovery removes all session-owned changes.
 There is no continuous DNS polling or TTL-based refresh; applying addresses or
 reconnecting performs a fresh lookup. Use actual internal values in private
 profiles; public examples remain blank.
@@ -114,10 +116,14 @@ check, select RD Gateway (443), direct RDP (3389), HTTP/HTTPS, or a custom port.
 The route, ping, and TCP results appear separately.
 Work routes and DNS are configured on connection, actual OpenConnect reconnect,
 bounded retries of unresolved names, and explicit application of work addresses.
-There are no periodic network diagnostics, internet probes or watchdog.
-Normal Disconnect/Exit removes the session's settings. After a crash or unexpected
-disconnect, press Restore Network: it stops only the recorded VPN process and removes
-the app's own settings. Existing profiles and private credentials are reused.
+There are no periodic network diagnostics or internet probes.
+Disconnect/Exit removes the session's settings. The worker also attempts cleanup
+if the UI exits unexpectedly or network setup fails during reconnection. When the
+app reports that recovery is required, press Restore Network and approve UAC.
+The elevated worker can recover from a protected journal even if the local session
+directory is missing. It stops only the recorded VPN process and removes the
+app's own settings.
+Existing profiles and private credentials are reused.
 New sessions record the adapter GUID in a protected journal, so recovery follows
 a renamed tunnel. When recovering a session created by an older build, restore
 the adapter name `FortiSplitWork` first if it has been renamed.
@@ -126,8 +132,9 @@ For a fresh installation, set the server under Settings → **VPN**, then select
 RDP file and configure TrueConf as needed under **Приложения**. Profiles, network
 recovery, logs, and updates are under **Обслуживание**. Enter the password and OTP
 when connecting.
-Disconnect FortiClient before using this app. A UAC prompt starts the network worker.
-The UI and launched work apps retain ordinary user rights.
+Disconnect FortiClient before using this app. Connecting and restoring the network
+require a Windows account that can approve UAC under its own name. The network
+worker runs elevated, while the UI and launched work apps retain ordinary user rights.
 
 Every settings field and option has a short description and a clickable **?**.
 The help window explains the input format, where to obtain the value, and when it
@@ -144,9 +151,11 @@ private IPC and mocked network setup/recovery. They do not prove compatibility w
 every gateway or successful RDP login/video calls. A real login requires user credentials.
 During authentication, the network wait after submitting a recognized one-time
 code is 30 seconds. Other network waits have a 90-second limit. Time spent entering
-credentials or a code is excluded. An explicit code rejection is shown as soon
-as OpenConnect exposes it. A timeout means the client received no conclusive
-result. A timeout permanently
+credentials or a code is excluded. Explicit code rejection and expiration have
+distinct messages when OpenConnect exposes them. The timeout message shows the
+latest HTTP status from the current step when available. Known HTTPS connection,
+HTTP parsing and response read errors are shown when reported before the deadline
+and no new HTTP response supersedes them. A timeout permanently
 ends that authentication attempt: subsequent native callbacks cannot show another
 form or restart the deadline. A failed HTTP response read also stops repeated form
 callbacks instead of asking for another MFA response. A private
@@ -154,8 +163,8 @@ callbacks instead of asking for another MFA response. A private
 timestamp. `auth-trace.json` retains up to 160 fixed phase/form-category events and
 numeric HTTP status codes, with timestamps; neither file retains form contents,
 credentials, server response bodies, headers or cookies. HTTP status extraction is
-limited to the known upstream printf literal on Windows x64; other progress output
-is discarded. HTTP 429, 405 and 5xx stop the attempt when reported by the native
+limited to the known upstream printf literal on Windows x64. Selected error
+formats produce fixed diagnostic categories. HTTP 429, 405 and 5xx stop the attempt when reported by the native
 HTTP callback. Terminal 403 responses and recognized login-limit notices have
 specific messages. An HTML MFA form with input fields
 can be shown after HTTP 401 or 403. A 403 containing a username/password form
