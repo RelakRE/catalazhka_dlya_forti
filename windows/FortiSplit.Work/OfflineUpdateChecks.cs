@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Security.Cryptography;
 
 namespace FortiSplit.Work;
@@ -35,16 +36,19 @@ internal static class OfflineUpdateChecks
             current = Path.Combine(previous, "Forti Split.exe");
             File.WriteAllText(current, "previous installation");
             Storage.Save(Path.Combine(previous, ".fortisplit-origin.json"), new UpdateMarker(origin));
-            Storage.Save(link, new UpdateLink(origin, current, Hash(current), PublisherVerified: true));
+            Storage.Save(link, new UpdateLink(origin, current));
             previousLink = File.ReadAllBytes(link);
         }
 
         // A missing parent models the old process having already exited.
-        Storage.Save(Path.Combine(staging, "ticket.json"), new UpdateTicket(origin, current, Hash(target), int.MaxValue, 0, PublisherVerified: true));
+        using var publisher = RSA.Create(3072);
+        string publisherKey = Convert.ToBase64String(publisher.ExportSubjectPublicKeyInfo());
+        SignExecutable(target, publisher);
+        Storage.Save(Path.Combine(staging, "ticket.json"), new UpdateTicket(origin, current, int.MaxValue, 0));
         using var ready = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\FortiSplitUpdateReady-" + id);
         Exception? error = null;
         string? restarted = null;
-        int result = UpdateInstall.Complete(id, updates, @"Local\FortiSplitUpdateTest-" + id,
+        int result = UpdateInstall.Complete(id, updates, @"Local\FortiSplitUpdateTest-" + id, current, publisherKey,
             failure => error = failure, path => restarted = path);
 
         bool processExited = error is IOException { Message: "Новая версия завершилась до запуска." };
@@ -54,5 +58,28 @@ internal static class OfflineUpdateChecks
             && restarted == current && linkRestored && File.ReadAllBytes(settings).SequenceEqual(profile);
     }
 
-    private static string Hash(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
+    internal static bool RejectsDifferentExecutable(string directory)
+    {
+        Directory.CreateDirectory(directory);
+        string executable = Path.Combine(directory, "Forti Split.exe");
+        File.WriteAllText(executable, "original");
+        using var publisher = RSA.Create(3072);
+        string key = Convert.ToBase64String(publisher.ExportSubjectPublicKeyInfo());
+        SignExecutable(executable, publisher);
+        using (UpdateInstall.OpenVerifiedExecutable(executable, key)) { }
+        File.WriteAllText(executable, "modified");
+        try { using var unverified = UpdateInstall.OpenVerifiedExecutable(executable, key); return false; }
+        catch (IOException) { return true; }
+    }
+
+    private static void SignExecutable(string executable, RSA publisher)
+    {
+        string directory = Path.GetDirectoryName(executable)!;
+        string archive = Path.Combine(directory, UpdateInstall.ProofArchive);
+        using (var zip = ZipFile.Open(archive, ZipArchiveMode.Create))
+            zip.CreateEntryFromFile(executable, "Forti Split.exe");
+        using var input = File.OpenRead(archive);
+        byte[] signature = publisher.SignHash(SHA256.HashData(input), HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
+        File.WriteAllBytes(Path.Combine(directory, UpdateInstall.ProofSignature), signature);
+    }
 }

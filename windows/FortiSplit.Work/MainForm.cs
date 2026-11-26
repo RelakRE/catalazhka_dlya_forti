@@ -20,7 +20,7 @@ internal sealed partial class MainForm : Form
  private readonly System.Windows.Forms.Timer poll=new(){Interval=500};
  private NotifyIcon? tray; private Process? worker; private EventWaitHandle? stop;
  private string? folder, inputFolder; private bool launched, closing, polling, stopRequested, recovering; private DateTime? connectedAt;
- private FileStream? bootstrapSource;
+ private IDisposable? bootstrapSource;
  private Status status=new("disconnected","Перед подключением отключите FortiClient.",Restored:true);
  private readonly TabControl tabs=new(){Dock=DockStyle.Fill}; private readonly List<Control> options=[];
  private static Button Btn(string text)=>new(){Text=text,Width=210,Height=44,FlatStyle=FlatStyle.Flat,Margin=new Padding(0,6,12,6)};
@@ -73,7 +73,7 @@ internal sealed partial class MainForm : Form
     if(ClientSize.Height>=300&&connect.Visible&&connect.Width>0)UpdateInstall.SignalReady();
     if(updateLaunch){
      bool committed=await UpdateInstall.WaitForCommit();if(IsDisposed)return;
-     if(!committed){detail.Text="Не удалось завершить обновление. Закройте приложение и откройте его снова.";return;}
+     if(!committed){detail.Text="Не удалось подтвердить обновление. Откройте прежнюю версию или установите выпуск вручную из ZIP.";return;}
      installingUpdate=false;RefreshUi();
     }
     StartUpdateChecks();if(initial.ConnectOnOpen)Try(Start);
@@ -125,8 +125,8 @@ internal sealed partial class MainForm : Form
  }
  private int StartWorker(ProcessStartInfo info,string sessionFolder)
  {
-  FileStream? source=info.ArgumentList.FirstOrDefault()?.StartsWith("--bootstrap-",StringComparison.Ordinal)==true
-   ? File.OpenRead(info.FileName) : null;
+  IDisposable? source=info.ArgumentList.FirstOrDefault()?.StartsWith("--bootstrap-",StringComparison.Ordinal)==true
+   ? UpdateInstall.OpenBootstrapExecutable(info.FileName) : null;
   try{
    var next=Process.Start(info)??throw new IOException("Не удалось запустить сетевой компонент.");
    worker?.Dispose();worker=next;folder=sessionFolder;

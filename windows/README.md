@@ -43,6 +43,9 @@ the user disconnects the VPN. The app verifies the archive's publisher signature
 against the public key embedded in the installed build, checks size and SHA-256,
 and installs into a separate LocalAppData folder. Settings are retained, and
 the new worker reuses the protected VPN runtime if its versions match.
+The app retains the signed archive and checks the installed executable against it
+before handing off a launch or elevating an updated build for the first time.
+If an older installation lacks that proof, open the release page to install it manually.
 The app switches to the new version only
 after preparation and restarts it; the previous installation remains available if
 the switch fails. **Открыть выпуск** remains available for manual installation.
@@ -143,8 +146,9 @@ protected journals, including after the original Windows account is gone. It
 stops only recorded VPN processes and removes the app's own settings.
 Existing profiles and private credentials are reused.
 New sessions record the adapter GUID in a protected journal, so recovery follows
-a renamed tunnel. A legacy session with only a user-writable journal copy needs
-administrator-assisted recovery.
+a renamed tunnel. Recovery can retire the user-side marker for a legacy VPN
+process that has already exited. A still-running legacy process or a network
+journal with no protected original or cleanup record needs administrator assistance.
 
 For a fresh installation, set the server under Settings → **VPN**, then select the
 RDP file and configure TrueConf as needed under **Приложения**. Profiles, network

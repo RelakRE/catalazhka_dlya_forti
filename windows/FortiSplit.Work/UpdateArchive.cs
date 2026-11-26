@@ -1,9 +1,19 @@
 using System.IO.Compression;
+using System.Security.Cryptography;
 
 namespace FortiSplit.Work;
 
 internal static class UpdateArchive
 {
+ internal static bool MatchesExecutable(Stream archive,Stream executable)
+ {
+  using var zip=new ZipArchive(archive,ZipArchiveMode.Read,leaveOpen:true);
+  var entry=zip.Entries.SingleOrDefault(item=>item.FullName.Equals("Forti Split.exe",StringComparison.OrdinalIgnoreCase));
+  if(entry is null||entry.Length!=executable.Length||entry.Length>160L*1024*1024)return false;
+  using var packaged=entry.Open();
+  return CryptographicOperations.FixedTimeEquals(SHA256.HashData(packaged),SHA256.HashData(executable));
+ }
+
  private static readonly HashSet<string> RootFiles=new(StringComparer.OrdinalIgnoreCase){"Forti Split.exe","Network.ps1","network-hook.js","profile.example.json","SECURITY.md","THIRD-PARTY.md","ПРОЧИТАЙ МЕНЯ.txt","fortisplit-update-v1.json"};
  private static bool SafeName(string name)
  {

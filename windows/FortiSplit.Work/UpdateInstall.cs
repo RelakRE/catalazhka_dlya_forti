@@ -1,23 +1,30 @@
+using System.ComponentModel;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.Win32.SafeHandles;
 
 namespace FortiSplit.Work;
 
 internal sealed record UpdateMarker(string OriginExe);
-internal sealed record UpdateLink(string OriginExe,string TargetExe,string TargetSha256,bool Pending=false,UpdateLink? Previous=null,bool PublisherVerified=false);
-internal sealed record UpdateTicket(string OriginExe,string CurrentExe,string TargetSha256,int ParentId,long ParentTicks,bool PublisherVerified=false);
+internal sealed record UpdateLink(string OriginExe,string TargetExe,bool Pending=false,UpdateLink? Previous=null);
+internal sealed record UpdateTicket(string OriginExe,string CurrentExe,int ParentId,long ParentTicks);
 
 internal static class UpdateInstall
 {
  private const string GateName=@"Local\FortiSplitWork-Update";
+ internal const string ProofArchive=".fortisplit-release.zip",ProofSignature=ProofArchive+".sig";
  private static string Updates=>Path.Combine(Storage.Root,"updates");
  private static string Versions=>Path.Combine(Updates,"versions");
  private static string Staging=>Path.Combine(Updates,"staging");
  private static string Links=>Path.Combine(Updates,"links");
  private static bool Equal(string a,string b)=>string.Equals(Path.GetFullPath(a),Path.GetFullPath(b),StringComparison.OrdinalIgnoreCase);
  private static bool Within(string path,string root)=>Path.GetFullPath(path).StartsWith(Path.GetFullPath(root)+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase);
- private static string Hash(string path){using var stream=File.OpenRead(path);return Convert.ToHexString(SHA256.HashData(stream));}
+ private static Version ProductVersion(string path){
+  var version=FileVersionInfo.GetVersionInfo(path);
+  return new(version.ProductMajorPart,version.ProductMinorPart,version.ProductBuildPart);
+ }
  private static string LinkPath(string origin)=>LinkPath(origin,Links);
  internal static string LinkPath(string origin,string links)=>Path.Combine(links,Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(origin).ToUpperInvariant())))+".json");
 
@@ -34,22 +41,86 @@ internal static class UpdateInstall
   return current;
  }
 
- internal static string? ForwardTarget(bool allowPending=false)
+ [DllImport("kernel32.dll",EntryPoint="CreateFileW",ExactSpelling=true,CharSet=CharSet.Unicode,SetLastError=true)]
+ private static extern SafeFileHandle OpenPath(string path,uint access,FileShare sharing,IntPtr security,
+  FileMode mode,uint flags,IntPtr template);
+
+ internal sealed class VerifiedExecutable(string path,FileStream image,List<SafeFileHandle> directories):IDisposable
+ {
+  internal string Path {get;}=path;
+
+  public void Dispose()
+  {
+   image.Dispose();
+   foreach(var directory in directories)directory.Dispose();
+  }
+ }
+
+ internal static VerifiedExecutable OpenVerifiedExecutable(string path,string? publisherKey)
+ {
+  if(string.IsNullOrEmpty(publisherKey))throw new IOException("Ключ издателя обновления отсутствует.");
+  const uint directoryAccess=1,readAccess=0x80000000,backupSemantics=0x02000000,openReparsePoint=0x00200000;
+  path=Path.GetFullPath(path);
+  string directory=Path.GetDirectoryName(path)!;
+  var parents=new Stack<string>();
+  for(var parent=new DirectoryInfo(directory);parent is not null;parent=parent.Parent)parents.Push(parent.FullName);
+  var lockedDirectories=new List<SafeFileHandle>();
+  FileStream? executable=null;
+  try{
+   // Hold each path component against rename or replacement until CreateProcess has opened it.
+   foreach(string parent in parents){
+    var handle=OpenPath(parent,directoryAccess,FileShare.ReadWrite,IntPtr.Zero,FileMode.Open,backupSemantics|openReparsePoint,IntPtr.Zero);
+    lockedDirectories.Add(handle);
+    if(handle.IsInvalid)throw new Win32Exception(Marshal.GetLastWin32Error());
+    Storage.RegularPath(parent);
+   }
+   string archivePath=Path.Combine(directory,ProofArchive),signaturePath=Path.Combine(directory,ProofSignature);
+   Storage.RegularPath(archivePath);Storage.RegularPath(signaturePath);
+   using var archive=File.OpenRead(archivePath);
+   using var signature=File.OpenRead(signaturePath);
+   if(archive.Length is <=0 or >200L*1024*1024||signature.Length is <384 or >512)
+    throw new IOException("Неверный размер данных проверки обновления.");
+   byte[] signatureBytes=new byte[(int)signature.Length];signature.ReadExactly(signatureBytes);
+   if(!UpdateDownload.VerifyPublisher(publisherKey,Convert.ToHexString(SHA256.HashData(archive)),signatureBytes))
+    throw new IOException("Подпись издателя обновления не прошла проверку.");
+   archive.Position=0;
+   var image=OpenPath(path,readAccess,FileShare.Read,IntPtr.Zero,FileMode.Open,openReparsePoint,IntPtr.Zero);
+   try{
+    if(image.IsInvalid)throw new Win32Exception(Marshal.GetLastWin32Error());
+    Storage.RegularPath(path);
+    executable=new FileStream(image,FileAccess.Read);
+   }catch{image.Dispose();throw;}
+   if(!UpdateArchive.MatchesExecutable(archive,executable))throw new IOException("Файл приложения отличается от подписанного выпуска.");
+   return new(path,executable,lockedDirectories);
+  }catch{
+   executable?.Dispose();
+   foreach(var parent in lockedDirectories)parent.Dispose();
+   throw;
+  }
+ }
+
+ internal static IDisposable OpenBootstrapExecutable(string path)
+ {
+  if(Within(path,Versions))return OpenVerifiedExecutable(path,UpdateDownload.PublisherKey);
+  Storage.RegularPath(path);
+  return File.OpenRead(path);
+ }
+
+ internal static VerifiedExecutable? ForwardTarget(bool allowPending=false)
  {
   try{
    string current=Environment.ProcessPath??throw new IOException();string origin=Origin(current);string path=LinkPath(origin);
    if(!File.Exists(path))return null;
    var link=Storage.Read<UpdateLink>(path);
-   if(!link.PublisherVerified)return null;
    if(link.Pending&&!allowPending){
-    if(link.Previous is not {PublisherVerified:true}){File.Delete(path);return Equal(current,origin)||!File.Exists(origin)?null:origin;}
+    if(link.Previous is null){File.Delete(path);return null;}
     Storage.Save(path,link.Previous);link=link.Previous;
    }
-   if(!Equal(link.OriginExe,origin)||!Within(link.TargetExe,Versions)||Path.GetFileName(link.TargetExe)!="Forti Split.exe")return null;
-   Storage.RegularPath(link.TargetExe);
-   if(!File.Exists(link.TargetExe)||!string.Equals(Hash(link.TargetExe),link.TargetSha256,StringComparison.OrdinalIgnoreCase))return null;
-   if(Equal(current,link.TargetExe))return null;
-   return link.TargetExe;
+   if(!Equal(link.OriginExe,origin)||!Within(link.TargetExe,Versions)||Path.GetFileName(link.TargetExe)!="Forti Split.exe"||Equal(current,link.TargetExe))return null;
+   var executable=OpenVerifiedExecutable(link.TargetExe,UpdateDownload.PublisherKey);
+   try{if(ProductVersion(executable.Path)>ProductVersion(current))return executable;}
+   catch{executable.Dispose();throw;}
+   executable.Dispose();return null;
   }catch(Exception){return null;}
  }
 
@@ -74,7 +145,9 @@ internal static class UpdateInstall
    if(!locked)return false;
    string current=Environment.ProcessPath??throw new IOException();string origin=Origin(current);
    var link=Storage.Read<UpdateLink>(LinkPath(origin));
-    return link.PublisherVerified&&!link.Pending&&Equal(link.OriginExe,origin)&&Equal(link.TargetExe,current);
+   if(link.Pending||!Equal(link.OriginExe,origin)||!Equal(link.TargetExe,current))return false;
+   using var executable=OpenVerifiedExecutable(current,UpdateDownload.PublisherKey);
+   return true;
   }catch(Exception){return false;}finally{if(locked)gate.ReleaseMutex();}
  });
 
@@ -111,7 +184,7 @@ internal static class UpdateInstall
   string temporary=Path.Combine(Staging,id),version=Path.Combine(Versions,id);Storage.Protect(temporary);
   bool launched=false;
   try{
-   await UpdateDownload.VerifyRelease(release,cancellation);
+   byte[] signature=await UpdateDownload.VerifyRelease(release,cancellation);
    string archive=Path.Combine(temporary,"release.zip");await UpdateDownload.Download(release,archive,cancellation);
    cancellation.ThrowIfCancellationRequested();
    await Task.Run(()=>{
@@ -122,17 +195,16 @@ internal static class UpdateInstall
     string client=Path.Combine(Path.GetDirectoryName(current)!,"client");Storage.RegularPath(client);
     if(Directory.Exists(client))UpdateRuntime.Copy(client,Path.Combine(version,"client"));
     Storage.Save(Path.Combine(version,".fortisplit-origin.json"),new UpdateMarker(origin));
+    File.Move(archive,Path.Combine(version,ProofArchive));
+    File.WriteAllBytes(Path.Combine(version,ProofSignature),signature);
    },cancellation);
    cancellation.ThrowIfCancellationRequested();
-   string target=Path.Combine(version,"Forti Split.exe");Storage.RegularPath(target);
    using var parent=Process.GetCurrentProcess();
-   string targetHash=await Task.Run(()=>Hash(target),cancellation);
-   Storage.Save(Path.Combine(temporary,"ticket.json"),new UpdateTicket(origin,current,targetHash,parent.Id,parent.StartTime.ToUniversalTime().Ticks,PublisherVerified:true));
-   File.Delete(archive);string helper=Path.Combine(temporary,"updater.exe");await Task.Run(()=>File.Copy(current,helper),cancellation);
+   Storage.Save(Path.Combine(temporary,"ticket.json"),new UpdateTicket(origin,current,parent.Id,parent.StartTime.ToUniversalTime().Ticks));
    using var ready=new EventWaitHandle(false,EventResetMode.AutoReset,@"Local\FortiSplitUpdateReady-"+id);
-   var info=new ProcessStartInfo(helper){UseShellExecute=false,CreateNoWindow=true};info.ArgumentList.Add("--complete-update");info.ArgumentList.Add(id);
+   var info=new ProcessStartInfo(current){UseShellExecute=false,CreateNoWindow=true};info.ArgumentList.Add("--complete-update");info.ArgumentList.Add(id);
    using var child=Process.Start(info)??throw new IOException("Не удалось запустить обновление.");
-   if(!await Task.Run(()=>ready.WaitOne(TimeSpan.FromSeconds(10)),cancellation)){try{child.Kill();}catch(Exception){}throw new IOException("Не удалось запустить обновление.");}
+   if(!await Task.Run(()=>ready.WaitOne(TimeSpan.FromSeconds(30)),cancellation)){try{child.Kill();}catch(Exception){}throw new IOException("Не удалось запустить обновление.");}
    if(cancellation.IsCancellationRequested){try{child.Kill();}catch(Exception){}cancellation.ThrowIfCancellationRequested();}
    launched=true;
   }finally{
@@ -140,11 +212,11 @@ internal static class UpdateInstall
   }
  }
 
- internal static int Complete(string id)=>Complete(id,Updates,GateName,
+ internal static int Complete(string id)=>Complete(id,Updates,GateName,Environment.ProcessPath!,UpdateDownload.PublisherKey,
   _=>MessageBox.Show("Не удалось завершить обновление. Прежняя версия сохранена.","Forti Split",MessageBoxButtons.OK,MessageBoxIcon.Error),
-  current=>Process.Start(new ProcessStartInfo(current){UseShellExecute=true})?.Dispose());
+  current=>{using var image=OpenBootstrapExecutable(current);Process.Start(new ProcessStartInfo(current){UseShellExecute=false})?.Dispose();});
 
- internal static int Complete(string id,string updates,string gateName,Action<Exception> reportFailure,Action<string> restart)
+ internal static int Complete(string id,string updates,string gateName,string current,string? publisherKey,Action<Exception> reportFailure,Action<string> restart)
  {
   if(!Guid.TryParseExact(id,"N",out _))return 1;
   string versions=Path.Combine(updates,"versions");
@@ -154,13 +226,16 @@ internal static class UpdateInstall
    try{locked=gate.WaitOne(0);}catch(AbandonedMutexException){locked=true;}
    if(!locked)throw new IOException("Уже выполняется обновление.");
    ticket=Storage.Read<UpdateTicket>(Path.Combine(temporary,"ticket.json"));
-   string target=Path.Combine(version,"Forti Split.exe");Storage.RegularPath(target);
-   if(!ticket.PublisherVerified||!File.Exists(target)||!string.Equals(Hash(target),ticket.TargetSha256,StringComparison.OrdinalIgnoreCase)||!Equal(Origin(ticket.CurrentExe,versions),ticket.OriginExe)||!Equal(Origin(target,versions),ticket.OriginExe))throw new IOException("Не удалось проверить подготовленное обновление.");
+   string target=Path.Combine(version,"Forti Split.exe");
+   if(!Equal(ticket.CurrentExe,current)||!Equal(Origin(current,versions),ticket.OriginExe)||!Equal(Origin(target,versions),ticket.OriginExe))
+    throw new IOException("Не удалось проверить подготовленное обновление.");
+   using var executable=OpenVerifiedExecutable(target,publisherKey);
+   if(ProductVersion(target)<=ProductVersion(current))throw new IOException("Подготовленное обновление не новее текущей версии.");
    using(var ready=EventWaitHandle.OpenExisting(@"Local\FortiSplitUpdateReady-"+id))ready.Set();
    try{using var parent=Process.GetProcessById(ticket.ParentId);if(!parent.HasExited&&(parent.StartTime.ToUniversalTime().Ticks!=ticket.ParentTicks||!Equal(parent.MainModule?.FileName??"",ticket.CurrentExe)||!parent.WaitForExit(30000)))throw new IOException("Приложение не завершилось.");}catch(ArgumentException){}parentExited=true;
    string path=LinkPath(ticket.OriginExe,Path.Combine(updates,"links"));UpdateLink? previous=File.Exists(path)?Storage.Read<UpdateLink>(path):null;
    if(previous?.Pending==true)throw new IOException("Предыдущее обновление не завершено.");
-   Storage.Save(path,new UpdateLink(ticket.OriginExe,target,ticket.TargetSha256,true,previous,PublisherVerified:true));
+   Storage.Save(path,new UpdateLink(ticket.OriginExe,target,true,previous));
    Process? next=null;
    try{
     using var started=new EventWaitHandle(false,EventResetMode.AutoReset,@"Local\FortiSplitUpdateStarted-"+id);
@@ -171,7 +246,7 @@ internal static class UpdateInstall
      if(next.HasExited)throw new IOException("Новая версия завершилась до запуска.");
      if(Stopwatch.GetElapsedTime(start).TotalSeconds>=30)throw new IOException("Новая версия не открылась.");
     }
-    Storage.Save(path,new UpdateLink(ticket.OriginExe,target,ticket.TargetSha256,PublisherVerified:true));
+    Storage.Save(path,new UpdateLink(ticket.OriginExe,target));
    }catch{try{if(next is not null&&!next.HasExited){next.Kill();next.WaitForExit();}}catch(Exception){}if(previous is null)File.Delete(path);else Storage.Save(path,previous);throw;}finally{next?.Dispose();}
    gate.ReleaseMutex();locked=false;
    return 0;

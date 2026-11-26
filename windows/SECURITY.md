@@ -10,7 +10,8 @@
   scripts under `Program Files\Forti Split Network`. The worker prepares the VPN
   runtime from archives verified against pinned SHA-256 values and checks installed
   files against a protected manifest on subsequent connections.
-- Administrators and SYSTEM control the installed files and the recovery journals.
+- Administrators and SYSTEM control the installed files, recovery journals and
+  machine-wide files that serialize VPN and network operations.
   The worker reads configuration and requests from LocalAppData and writes status,
   logs and session files in Program Files. The desktop account can read its own
   session output. The protected recovery journal records the tunnel adapter GUID.
@@ -20,7 +21,8 @@
 - TLS validation failures are rejected. The app provides no trust-bypass checkbox.
 - The app checks the VPN hostname and port before showing or submitting every
   authentication form. Automatic updates require a publisher signature that
-  matches the public key embedded in the installed build.
+  matches the public key embedded in the installed build. The updater checks the
+  launched executable against the signed archive and retains that proof for later launches.
 - The Work tab uses the IPv4 addresses and packet lengths observed on the VPN
   interface to count traffic to configured work IPs. Packet contents are discarded.
   The private session status contains the currently active work IPs, their names,

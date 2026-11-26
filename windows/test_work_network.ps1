@@ -96,11 +96,14 @@ function Assert($condition,$message){if(-not $condition){throw $message}}
  Assert ($s.Routes -contains '203.0.113.47/32' -and $s.GatewayConflicts -contains '203.0.113.45') 'Applying a mixed list rejected the safe work address'
  & $network -Session $session -Mode Cleanup
  $previousVpnDns=$env:INTERNAL_IP4_DNS
- $env:INTERNAL_IP4_DNS='203.0.113.45 192.0.2.53'
+ $env:INTERNAL_IP4_DNS='2001:db8::53 203.0.113.45 192.0.2.53 192.0.2.53'
  & $network -Session $session -Mode Hook
  $s=Get-Content (Join-Path $session 'network.json') -Raw|ConvertFrom-Json
- Assert (($s.Dns -join ',') -eq '192.0.2.53' -and $s.Routes -notcontains '203.0.113.45/32') 'A DNS address matching the gateway captured the transport route'
+ Assert (($s.Dns -join ',') -eq '192.0.2.53' -and $s.Routes -notcontains '203.0.113.45/32') 'Mixed DNS did not retain just the usable IPv4 resolver'
  & $network -Session $session -Mode Cleanup
+ $env:INTERNAL_IP4_DNS='2001:db8::53'
+ & $network -Session $session -Mode Hook
+ Assert ($LASTEXITCODE -eq 1 -and $global:fortiTestroutes.Count -eq 0) 'An IPv4 session proceeded without an IPv4 DNS server'
  $env:INTERNAL_IP4_DNS=$previousVpnDns
  $env:VPNGATEWAY=''
  $global:fortiTestDnsMap.Clear()
@@ -149,15 +152,16 @@ function Assert($condition,$message){if(-not $condition){throw $message}}
  $foreignOwner='S-1-0-0'
  $foreignSession=Join-Path $sessionRoot ($foreignOwner+'-'+$orphanId)
  $orphanJournal=Join-Path $journalDirectory.FullName ($foreignOwner+'-'+$orphanId+'.json')
+ $orphanReceipt=Join-Path $journalDirectory.FullName ($foreignOwner+'-'+$orphanId+'.restored')
  Move-Item -LiteralPath (Join-Path $journalDirectory.FullName ($sid+'-'+$orphanId+'.json')) -Destination $orphanJournal
  $global:fortiTestfailRemove=$true
  & $network -Session $foreignSession -Mode Cleanup -OwnerSid $foreignOwner
- Assert ($LASTEXITCODE -eq 1 -and @(Get-ChildItem -LiteralPath $journalDirectory.FullName -Filter '*.json').Count -eq 1) 'Orphan cleanup failure lost the protected journal'
+ Assert ($LASTEXITCODE -eq 1 -and (Test-Path -LiteralPath $orphanJournal) -and !(Test-Path -LiteralPath $orphanReceipt)) 'Orphan cleanup failure changed the protected recovery record'
  $global:fortiTestfailRemove=$false
  & $network -Session $foreignSession -Mode Cleanup -OwnerSid $foreignOwner
  Assert ($global:fortiTestroutes.Count -eq 0 -and $global:fortiTestips.Count -eq 0) 'Protected journal could not recover routes or address'
  Assert ($global:fortiTestrules.Count -eq 1 -and $global:fortiTestrules[0].Name -eq 'foreign') 'Orphan cleanup changed foreign DNS policy'
- Assert (@(Get-ChildItem -LiteralPath $journalDirectory.FullName -Filter '*.json').Count -eq 0) 'Orphan recovery retained the journal'
+ Assert (!(Test-Path -LiteralPath $orphanJournal) -and (Test-Path -LiteralPath $orphanReceipt)) 'Orphan recovery did not record confirmed cleanup'
  & $network -Session $session -Mode Hook
  $global:fortiTestfailResolve=$true
  & $network -Session $session -Mode Resolve

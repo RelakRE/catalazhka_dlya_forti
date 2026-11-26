@@ -7,7 +7,7 @@ namespace FortiSplit.Work;
 
 internal static class UpdateDownload
 {
- private static readonly string? PublisherKey=typeof(UpdateDownload).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
+ internal static readonly string? PublisherKey=typeof(UpdateDownload).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
   .SingleOrDefault(attribute=>attribute.Key=="FortiSplitUpdatePublicKey")?.Value;
 
  internal static bool CanInstall(UpdateCandidate? release)=>
@@ -49,7 +49,7 @@ internal static class UpdateDownload
   throw new IOException("Слишком много перенаправлений.");
  }
 
- internal static async Task VerifyRelease(UpdateCandidate release,CancellationToken cancellation)
+ internal static async Task<byte[]> VerifyRelease(UpdateCandidate release,CancellationToken cancellation)
  {
   if(!CanInstall(release))throw new IOException("Для этого выпуска недоступно подписанное обновление.");
   using var timeout=CancellationTokenSource.CreateLinkedTokenSource(cancellation);timeout.CancelAfter(TimeSpan.FromSeconds(20));
@@ -59,6 +59,7 @@ internal static class UpdateDownload
   byte[] signature=new byte[513];int length=await input.ReadAtLeastAsync(signature,signature.Length,false,timeout.Token);
   if(length>512||!VerifyPublisher(PublisherKey!,release.Sha256,signature.AsSpan(0,length)))
    throw new IOException("Подпись издателя обновления не прошла проверку.");
+  return signature[..length];
  }
 
  internal static async Task Download(UpdateCandidate release,string destination,CancellationToken cancellation,HttpMessageHandler? testHandler=null)

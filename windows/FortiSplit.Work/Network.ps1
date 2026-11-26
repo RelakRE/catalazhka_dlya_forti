@@ -29,8 +29,20 @@ $journalBase=Join-Path $journalDirectory $sessionName
 $journalPath=$journalBase+'.json'
 $hookLeasePath=$journalBase+'.live'
 $tag='FortiSplitWork-'+$sessionId
-$mutex=New-Object Threading.Mutex($false,'Global\FortiSplitWork-Network')
-$locked=$false
+$lockPath=Join-Path $serverRoot 'network.lock'
+$networkLock=$null
+function Enter-NetworkLock {
+ $timer=[Diagnostics.Stopwatch]::StartNew()
+ do {
+  try { return [IO.File]::Open($lockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None) }
+  catch {
+   $errorCode=$_.Exception.GetBaseException().HResult -band 0xffff
+   if ($errorCode -notin @(32,33)) { throw }
+  }
+  Start-Sleep -Milliseconds 100
+ } while ($timer.ElapsedMilliseconds -lt 30000)
+ throw 'Network operation still running'
+}
 function Save-State {
  # The privileged journal is authoritative. The UI reads a copy in its session.
  $json=$script:state | ConvertTo-Json -Depth 8
@@ -134,6 +146,9 @@ function Cleanup {
  if (@(Get-DnsClientNrptRule | Where-Object Comment -eq $tag).Count) { throw 'DNS cleanup not confirmed' }
  $guarded=@(Get-Guarded $s)
  if($guarded.Count){Set-PacketFilters 0 $guarded @()}
+ # An older worker kept the user's copy outside Program Files. Another admin
+ # can recover the protected journal without being able to remove that copy.
+ if (!$sessionExists) { [IO.File]::WriteAllText($journalBase+'.restored','') }
  if (Test-Path -LiteralPath $journalPath) { Remove-Item -LiteralPath $journalPath }
  if ($sessionExists -and (Test-Path -LiteralPath $statePath)) { Remove-Item -LiteralPath $statePath -ErrorAction SilentlyContinue }
 }
@@ -181,8 +196,7 @@ try {
  if ($Mode -eq 'Hook' -and $env:reason -eq 'reconnect') {
   New-Item -ItemType File -Path $reconnectingPath -Force | Out-Null
  }
- try { $locked=$mutex.WaitOne(30000) } catch [Threading.AbandonedMutexException] { $locked=$true }
- if (-not $locked) { throw 'Network operation still running' }
+ $networkLock=Enter-NetworkLock
  if ($Mode -eq 'Hook' -and !(Test-Path -LiteralPath $hookLeasePath -PathType Leaf)) { return }
  if ($Mode -eq 'Cleanup') { Cleanup; return }
  if ($Mode -ne 'Hook') {
@@ -208,9 +222,11 @@ try {
   $index=[int]$env:TUNIDX; $address=$env:INTERNAL_IP4_ADDRESS; Assert-IP $address
   $adapter=Get-NetAdapter -InterfaceIndex $index
   if ($adapter.Name -ne 'FortiSplitWork') { throw 'Unexpected tunnel adapter' }
-  $dns=@($env:INTERNAL_IP4_DNS -split '\s+' | Where-Object { $_ })
-  if ($dns.Count -lt 1 -or $dns.Count -gt 4) { throw 'Missing or excessive VPN DNS' }
-  foreach ($ip in $dns) { Assert-IP $ip }
+  $advertisedDns=@($env:INTERNAL_IP4_DNS -split '\s+' | Where-Object { $_ })
+  if ($advertisedDns.Count -gt 4) { throw 'Missing or excessive VPN DNS' }
+  # OpenConnect can include IPv6 nameservers in this variable even for an IPv4 tunnel.
+  $dns=@($advertisedDns | Where-Object { Test-IPv4 $_ } | Select-Object -Unique)
+  if (!$dns.Count) { throw 'Missing or excessive VPN DNS' }
   $gateway=$env:VPNGATEWAY
   $peer=$null
   if($gateway -and [Net.IPAddress]::TryParse($gateway.Trim([char[]]'[]'),[ref]$peer)){$gateway=$peer.ToString()}
@@ -391,4 +407,4 @@ $configReplaced=$false
  if ($sessionExists) { [IO.File]::WriteAllText($errorPath,$message) }
  Write-Error $message -ErrorAction Continue
  exit $exitCode
-} finally { if ($locked) { $mutex.ReleaseMutex() }; $mutex.Dispose() }
+} finally { if ($null -ne $networkLock) { $networkLock.Dispose() } }

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.AccessControl;
 using System.Security.Principal;
 
@@ -17,6 +18,7 @@ internal static class NetworkScripts
  internal static string ClientJournal(string sid,string id) => Path.Combine(StateDirectory,sid+"-"+id+".vpn.json");
  internal static string HookLease(string sid,string id) => Path.Combine(StateDirectory,sid+"-"+id+".live");
  internal static bool HasJournal(string sid,string id) => File.Exists(Path.Combine(StateDirectory,sid+"-"+id+".json"));
+ internal static bool WasNetworkRestored(string sid,string id) => File.Exists(Path.Combine(StateDirectory,sid+"-"+id+".restored"));
 
  internal static string SessionPath(string sid, string id)
  {
@@ -48,7 +50,23 @@ internal static class NetworkScripts
   }
  }
 
- // Called by the elevated worker under the machine-wide session mutex.
+ internal static FileStream? AcquireSessionLock(TimeSpan timeout) => AcquireLock(Path.Combine(Root,"session.lock"),timeout);
+
+ internal static FileStream? AcquireLock(string path,TimeSpan timeout)
+ {
+  Storage.RegularPath(path);
+  var timer=Stopwatch.StartNew();
+  while(true){
+   try{return new FileStream(path,FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None);}
+   catch(IOException error) when((error.HResult & 0xffff) is 32 or 33){
+    var remaining=timeout-timer.Elapsed;
+    if(remaining<=TimeSpan.Zero)return null;
+    Thread.Sleep(remaining<TimeSpan.FromMilliseconds(100)?remaining:TimeSpan.FromMilliseconds(100));
+   }
+  }
+ }
+
+ // Called by the elevated worker while holding the machine-wide session lock.
  internal static void Prepare() => InstallInto(Root);
 
  internal static void InstallWorker(string source)

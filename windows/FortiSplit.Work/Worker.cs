@@ -16,7 +16,6 @@ internal static class Worker
  private static readonly TimeSpan NetworkReadyLimit=TimeSpan.FromSeconds(120);
  internal const int AccountMismatchExitCode=4;
  internal const string AccountMismatchMessage="Сетевой компонент должен работать под той же учётной записью, что и Forti Split. Для подключения или восстановления сети подтвердите UAC под этой учётной записью.";
- private const string SessionMutexName=@"Global\FortiSplitWork-Session";
  [DllImport("kernel32.dll")] private static extern bool AllocConsole();
  [DllImport("kernel32.dll")] private static extern IntPtr GetConsoleWindow();
  [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr window,int command);
@@ -58,7 +57,7 @@ internal static class Worker
   if(ownerSid is not null){info.ArgumentList.Add("-OwnerSid");info.ArgumentList.Add(ownerSid);}
   using var process=Process.Start(info) ?? throw new IOException("Не запущен сетевой обработчик.");
   if(!process.WaitForExit(NetworkScriptTimeoutMilliseconds)){
-   // Every mutation is journaled; cleanup serializes with the network mutex.
+   // Every mutation is journaled; cleanup serializes with the protected network lock.
    StopProcess(process,entireTree:true);
    throw new IOException("Сетевой обработчик не завершился за отведённое время.");
   }
@@ -116,6 +115,21 @@ internal static class Worker
    StopProcess(child);
   }
  }
+
+ internal static bool LegacyClientExited(string path)
+ {
+  VpnProcess saved;
+  try{saved=Storage.Read<VpnProcess>(path);}
+  catch(IOException error) when(error is FileNotFoundException or DirectoryNotFoundException){return true;}
+  if(saved.Id<=0||saved.StartTicks<=0)throw new IOException("Неверные данные старого VPN-процесса.");
+  // A user-writable marker is useful for checking whether an old PID has
+  // disappeared. It can never authorize stopping a process.
+  try{
+   using var child=Process.GetProcessById(saved.Id);
+   return child.HasExited||child.StartTime.ToUniversalTime().Ticks!=saved.StartTicks;
+  }catch(ArgumentException){return true;}
+  catch(InvalidOperationException){return false;}
+ }
  internal static int Recover(string requestId,int parentId,long parentTicks,bool bootstrap)
  {
   using var identity=WindowsIdentity.GetCurrent();
@@ -123,46 +137,65 @@ internal static class Worker
   using var parent=OpenParent(parentId,parentTicks,identity.User!,bootstrap);
   if(parent is null)return AccountMismatchExitCode;
   string sid=identity.User!.Value,resultFolder=NetworkScripts.SessionPath(sid,requestId);
-  using var mutex=new Mutex(false,SessionMutexName);
-  bool locked=false;
   try{
    NetworkScripts.PrepareSession(sid,requestId);
-   // A worker still finishing a session can release the mutex after its stop signal.
+   // A worker still finishing a session can release the lock after its stop signal.
    foreach(string id in Storage.SessionsWithRecoveryFiles()){
     try{using var previousStop=EventWaitHandle.OpenExisting(StopName(id));previousStop.Set();}
     catch(WaitHandleCannotBeOpenedException){ }
    }
-   try{locked=mutex.WaitOne(30000);}catch(AbandonedMutexException){locked=true;}
-   if(!locked)throw new IOException("Другой сеанс VPN ещё выполняется.");
+   using var sessionLock=NetworkScripts.AcquireSessionLock(TimeSpan.FromSeconds(30))
+    ??throw new IOException("Другой сеанс VPN ещё выполняется.");
    NetworkScripts.Prepare();
    if(bootstrap)NetworkScripts.InstallWorker(Environment.ProcessPath!);
    var sessions=NetworkScripts.PendingSessions(NetworkScripts.StateDirectory).Distinct().ToArray();
-   var recovered=new List<RecoveredSession>();
+   var recovered=new Dictionary<string,RecoveredSession>();
+   var legacy=Storage.SessionsWithRecoveryFiles().ToHashSet(StringComparer.OrdinalIgnoreCase);
    int failures=0;
+   bool legacyClientRunning=false;
    foreach(var (ownerSid,id) in sessions){
     string folder=NetworkScripts.SessionPath(ownerSid,id),journalPath=NetworkScripts.ClientJournal(ownerSid,id);
     bool networkJournal=NetworkScripts.HasJournal(ownerSid,id);
     bool clientRecorded=File.Exists(journalPath);
     try{
+     if(ownerSid==sid&&!clientRecorded&&legacy.Contains(id)){
+      string marker=Path.Combine(Storage.SessionPath(id),"vpn-process.json");
+      var wait=Stopwatch.StartNew();
+      bool exited=LegacyClientExited(marker);
+      while(!exited&&wait.Elapsed<TimeSpan.FromSeconds(10)){
+       Thread.Sleep(100);
+       exited=LegacyClientExited(marker);
+      }
+      if(!exited){legacyClientRunning=true;continue;}
+     }
      File.Delete(NetworkScripts.HookLease(ownerSid,id));
      StopSavedClient(journalPath);
      if(Script(folder,"Cleanup",ownerSid:ownerSid)!=0)
       throw new IOException("Не удалось подтвердить восстановление сети.");
      if(clientRecorded)File.Delete(journalPath);
-     if(ownerSid==sid)recovered.Add(new(id,networkJournal,clientRecorded));
+     if(ownerSid==sid)recovered[id]=new(id,networkJournal,clientRecorded);
     }catch(Exception error) when(error is IOException or UnauthorizedAccessException or Win32Exception or JsonException or InvalidOperationException) {
      failures++;
     }
    }
-   Storage.Save(Path.Combine(resultFolder,"recovered-sessions.json"),recovered);
+   foreach(string id in legacy){
+    if(NetworkScripts.HasJournal(sid,id)||File.Exists(NetworkScripts.ClientJournal(sid,id)))continue;
+    var result=recovered.GetValueOrDefault(id);
+    try{
+     string marker=Path.Combine(Storage.SessionPath(id),"vpn-process.json");
+     bool clientGone=result?.Client==true||LegacyClientExited(marker);
+     legacyClientRunning|=!clientGone;
+     recovered[id]=new(id,result?.Network==true||NetworkScripts.WasNetworkRestored(sid,id),clientGone);
+    }catch(Exception error) when(error is IOException or UnauthorizedAccessException or Win32Exception or JsonException){failures++;}
+   }
+   Storage.Save(Path.Combine(resultFolder,"recovered-sessions.json"),recovered.Values.ToArray());
    if(failures>0)throw new IOException("Не удалось очистить все сеансы VPN. Повторите восстановление сети.");
+   if(legacyClientRunning)throw new IOException("VPN-процесс старой версии ещё работает. Завершите старый сеанс и повторите восстановление сети.");
    State(resultFolder,"disconnected",sessions.Length==0?"Незавершённых сетевых изменений не найдено.":"Сеть восстановлена.",restored:true);
    return 0;
   }catch(Exception error){
    TryState(resultFolder,"recovery_required",error.Message);
    return 1;
-  }finally{
-   if(locked)mutex.ReleaseMutex();
   }
  }
  internal static int Run(string id,int parentId,long parentTicks,bool bootstrap)
@@ -172,7 +205,7 @@ internal static class Worker
   using var parent=OpenParent(parentId,parentTicks,identity.User!,bootstrap);
   if(parent is null)return AccountMismatchExitCode;
   string sid=identity.User!.Value,folder=NetworkScripts.SessionPath(sid,id);
-  using var mutex=new Mutex(false,SessionMutexName); bool locked=false;
+  FileStream? sessionLock=null;
   Process? vpn=null;
   EventWaitHandle? stop=null;
   TunnelPacketMonitor? activity=null;
@@ -184,8 +217,8 @@ internal static class Worker
   IOException NetworkFailure(string message){cleanupRequired=true;return new IOException(message);}
   try {
    NetworkScripts.PrepareSession(sid,id);
-   try { locked=mutex.WaitOne(0); } catch(AbandonedMutexException) { locked=true; }
-   if(!locked) throw new IOException("Другой сеанс VPN ещё выполняется.");
+   sessionLock=NetworkScripts.AcquireSessionLock(TimeSpan.Zero)
+    ??throw new IOException("Другой сеанс VPN ещё выполняется.");
    NetworkScripts.Prepare();
    if(bootstrap)NetworkScripts.InstallWorker(Environment.ProcessPath!);
    // Protected records survive the loss of an entire per-user session directory.
@@ -373,12 +406,12 @@ internal static class Worker
   catch(Exception e) {
    failure=e.Message;
    cleanupRequired|=vpn is {HasExited:false};
-   if(!locked)TryState(folder,"recovery_required",failure);
+   if(sessionLock is null)TryState(folder,"recovery_required",failure);
   }
   finally {
    activity?.Dispose();
    var lastTraffic=peerCounters.Finish();
-   if(locked) {
+   if(sessionLock is not null) {
     try {
      if(scriptsReady)File.Delete(NetworkScripts.HookLease(sid,id));
      if((StopRequested()||cleanupRequired) && scriptsReady){
@@ -397,7 +430,7 @@ internal static class Worker
      }
     } catch(Exception e) { try { State(folder,"recovery_required","Ошибка завершения: "+e.Message); } catch(Exception) { } }
    }
-   vpn?.Dispose();stop?.Dispose();if(locked) mutex.ReleaseMutex();
+   vpn?.Dispose();stop?.Dispose();sessionLock?.Dispose();
   }
   return cleaned&&!cleanupRequired?0:1;
  }

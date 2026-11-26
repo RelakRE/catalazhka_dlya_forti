@@ -164,6 +164,18 @@ internal static class OfflineChecks
    try{Worker.StopSavedClient(savedProcess);checks["manual_recovery_refuses_own_process"]=false;}catch(IOException){checks["manual_recovery_refuses_own_process"]=true;}
    Storage.Save(savedProcess,new{Id=int.MaxValue,StartTicks=0L,Image=image});
    Worker.StopSavedClient(savedProcess);checks["manual_recovery_handles_missing_process"]=true;
+   Storage.Save(savedProcess,new{Id=int.MaxValue,StartTicks=1L,Image=image});
+   checks["legacy_recovery_recognizes_exited_process"]=Worker.LegacyClientExited(savedProcess);
+   using(var ownProcess=Process.GetCurrentProcess()){
+    Storage.Save(savedProcess,new{Id=ownProcess.Id,StartTicks=ownProcess.StartTime.ToUniversalTime().Ticks,Image=image});
+    checks["legacy_recovery_reports_live_process_without_stopping_it"]=!Worker.LegacyClientExited(savedProcess);
+   }
+   string lockPath=Path.Combine(recoveryTest,"session.lock");
+   using(var firstLock=NetworkScripts.AcquireLock(lockPath,TimeSpan.Zero))
+   using(var blockedLock=NetworkScripts.AcquireLock(lockPath,TimeSpan.Zero))
+    checks["session_file_lock_is_exclusive"]=firstLock is not null&&blockedLock is null;
+   using(var reopenedLock=NetworkScripts.AcquireLock(lockPath,TimeSpan.Zero))
+    checks["session_file_lock_can_be_reopened"]=reopenedLock is not null;
    string journal=Path.Combine(recoveryTest,"journals");
    Directory.CreateDirectory(journal);
    string orphanId=Guid.NewGuid().ToString("N"),sid=identity.User!.Value;
@@ -180,6 +192,10 @@ internal static class OfflineChecks
    catch(IOException){checks["orphan_recovery_reads_protected_process_identity"]=true;}
   }catch(Exception error){RecordFailure("manual_recovery_handles_missing_process","verify_recovery",error);}
   finally{try{Directory.Delete(recoveryTest,true);}catch{}}
+  string signatureTest=Path.Combine(Path.GetTempPath(),"FortiSplitSignatureCheck-"+Guid.NewGuid().ToString("N"));
+  try{checks["update_rejects_executable_different_from_signed_archive"]=OfflineUpdateChecks.RejectsDifferentExecutable(signatureTest);}
+  catch(Exception error){RecordFailure("update_rejects_executable_different_from_signed_archive","verify_update",error);}
+  finally{try{Directory.Delete(signatureTest,true);}catch{}}
   foreach(bool previous in new[]{false,true}){
    string check=previous?"update_failure_restores_previous_link_and_profile":"update_failure_restores_original_and_profile";
    string directory=Path.Combine(Path.GetTempPath(),"FortiSplitUpdateCheck-"+Guid.NewGuid().ToString("N"));
