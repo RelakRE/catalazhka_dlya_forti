@@ -7,11 +7,13 @@ namespace FortiSplit.Work;
 
 internal static class UpdateDownload
 {
+ internal const int MaximumAttestationSize=128*1024;
  internal static readonly string? PublisherKey=typeof(UpdateDownload).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
   .SingleOrDefault(attribute=>attribute.Key=="FortiSplitUpdatePublicKey")?.Value;
 
  internal static bool CanInstall(UpdateCandidate? release)=>
-  release is {HasVerifiableArchive:true,HasPublisherSignature:true}&&!string.IsNullOrEmpty(PublisherKey);
+  release is {HasVerifiableArchive:true}&&
+  (release.HasBuildAttestation||release.HasPublisherSignature&&!string.IsNullOrEmpty(PublisherKey));
 
  internal static bool VerifyPublisher(string publicKey,string digest,ReadOnlySpan<byte> signature)
  {
@@ -49,17 +51,20 @@ internal static class UpdateDownload
   throw new IOException("Слишком много перенаправлений.");
  }
 
- internal static async Task<byte[]> VerifyRelease(UpdateCandidate release,CancellationToken cancellation)
+ internal static async Task<byte[]> DownloadProof(UpdateCandidate release,CancellationToken cancellation)
  {
-  if(!CanInstall(release))throw new IOException("Для этого выпуска недоступно подписанное обновление.");
+  if(!CanInstall(release))throw new IOException("Для этого выпуска нет проверяемого обновления.");
+  bool attestation=release.HasBuildAttestation;
+  int limit=attestation?MaximumAttestationSize:512;
   using var timeout=CancellationTokenSource.CreateLinkedTokenSource(cancellation);timeout.CancelAfter(TimeSpan.FromSeconds(20));
   using var client=CreateClient(null);
-  using var response=await Get(client,Asset(release,".sig"),timeout.Token);
+  using var response=await Get(client,Asset(release,attestation?UpdateCatalog.AttestationSuffix:".sig"),timeout.Token);
   await using var input=await response.Content.ReadAsStreamAsync(timeout.Token);
-  byte[] signature=new byte[513];int length=await input.ReadAtLeastAsync(signature,signature.Length,false,timeout.Token);
-  if(length>512||!VerifyPublisher(PublisherKey!,release.Sha256,signature.AsSpan(0,length)))
+  byte[] proof=new byte[limit+1];int length=await input.ReadAtLeastAsync(proof,proof.Length,false,timeout.Token);
+  if(length<=0||length>limit)throw new IOException("Неверный размер подтверждения обновления.");
+  if(!attestation&&!VerifyPublisher(PublisherKey!,release.Sha256,proof.AsSpan(0,length)))
    throw new IOException("Подпись издателя обновления не прошла проверку.");
-  return signature[..length];
+  return proof[..length];
  }
 
  internal static async Task Download(UpdateCandidate release,string destination,CancellationToken cancellation,HttpMessageHandler? testHandler=null)

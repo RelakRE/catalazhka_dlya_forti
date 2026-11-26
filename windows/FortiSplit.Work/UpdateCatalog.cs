@@ -3,13 +3,15 @@ using System.Text.RegularExpressions;
 
 namespace FortiSplit.Work;
 
-public sealed record UpdateCandidate(Version Version, string PageUrl, long AssetId = 0, string Sha256 = "", long Size = 0, bool HasPublisherSignature = false)
+public sealed record UpdateCandidate(Version Version, string PageUrl, long AssetId = 0, string Sha256 = "", long Size = 0,
+ bool HasPublisherSignature = false, bool HasBuildAttestation = false)
 {
  public bool HasVerifiableArchive => AssetId>0 && Size>0 && Size<=200L*1024*1024 && Regex.IsMatch(Sha256,@"^[a-f0-9]{64}$",RegexOptions.CultureInvariant);
 }
 
 public static class UpdateCatalog
 {
+ internal const string AttestationSuffix=".sigstore.json";
  private const string PageBase="https://github.com/RelakRE/catalazhka_dlya_forti/releases/tag/";
  private static readonly Regex Tag=new(@"^windows-v(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})$",RegexOptions.CultureInvariant);
 
@@ -34,13 +36,14 @@ public static class UpdateCatalog
    if(!match.Success||!Version.TryParse(tag[9..],out var version)||version<=current||(best is not null&&version<=best.Version))continue;
    string assetName=$"Forti-Split-{version.Major}.{version.Minor}.{version.Build}-Windows-x64.zip";
    bool hasSignature=assets.EnumerateArray().Any(asset=>IsUploaded(asset,assetName+".sig"));
+   bool hasAttestation=assets.EnumerateArray().Any(asset=>IsUploaded(asset,assetName+AttestationSuffix));
    foreach(var asset in assets.EnumerateArray()){
     if(!IsUploaded(asset,assetName))continue;
     long id=asset.TryGetProperty("id",out var idValue)&&idValue.ValueKind==JsonValueKind.Number&&idValue.TryGetInt64(out long parsedId)?parsedId:0;
     long size=asset.TryGetProperty("size",out var sizeValue)&&sizeValue.ValueKind==JsonValueKind.Number&&sizeValue.TryGetInt64(out long parsedSize)?parsedSize:0;
     string digest=asset.TryGetProperty("digest",out var digestValue)&&digestValue.ValueKind==JsonValueKind.String?digestValue.GetString()??"":"";
     string hash=digest.StartsWith("sha256:",StringComparison.Ordinal)?digest[7..]:"";
-    best=new(version,PageBase+tag,id,hash,size,hasSignature);break;
+    best=new(version,PageBase+tag,id,hash,size,hasSignature,hasAttestation);break;
    }
   }
   return best;

@@ -16,6 +16,9 @@ jobs:
     timeout-minutes: 25
     permissions:
       contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     defaults:
       run:
         working-directory: windows
@@ -29,6 +32,29 @@ jobs:
       - name: Build archive and verify first-run preparation and native offline tests
         id: package
         run: ./build-release.ps1 -SourceCommit $env:GITHUB_SHA
+      - name: Attest the Windows archive
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: windows/${{ steps.package.outputs.assets }}/Forti-Split-${{ steps.package.outputs.version }}-Windows-x64.zip
+      - name: Verify the archive using Forti Split
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          RELEASE_VERSION: ${{ steps.package.outputs.version }}
+          RELEASE_ASSETS: ${{ steps.package.outputs.assets }}
+        run: |
+          $package = "Forti-Split-$env:RELEASE_VERSION-Windows-x64"
+          $archive = (Resolve-Path "$env:RELEASE_ASSETS/$package.zip").Path
+          $app = (Resolve-Path "build/release/$package/Forti Split.exe").Path
+          $proof = "$archive.sigstore.json"
+          Copy-Item -LiteralPath $env:BUNDLE -Destination $proof
+          $test = Start-Process -FilePath $app -ArgumentList @('--verify-release-attestation', ('"' + $archive + '"'), ('"' + $proof + '"')) -WindowStyle Hidden -PassThru
+          try {
+            if (!$test.WaitForExit(20000)) { $test.Kill(); throw 'Attestation verification timed out' }
+            if ($test.ExitCode -ne 0) { throw 'Forti Split rejected the release attestation' }
+          } finally { $test.Dispose() }
+          $hash = (Get-FileHash -LiteralPath $proof -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $([IO.Path]::GetFileName($proof))" | Add-Content -LiteralPath "$env:RELEASE_ASSETS/SHA256SUMS.txt" -Encoding utf8
       - name: Publish Windows preview
         env:
           GH_TOKEN: ${{ github.token }}

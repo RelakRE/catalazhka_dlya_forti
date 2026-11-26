@@ -7,6 +7,9 @@ distributions directly, checks their pinned SHA256 values, extracts the required
 runtime files locally and deletes temporary archive tools. The source and download
 URLs and hashes are recorded in `FortiSplit.Work/RuntimeSetup.cs`.
 
+The update verifier includes Sigstore for .NET, Tuf, and BouncyCastle.Cryptography.
+The release archive contains their MIT license and notices under `licenses/`.
+
 Downloaded components: OpenConnect 9.21 (LGPL 2.1 and component licenses), its
 unmodified upstream Windows runtime dependencies, Wintun 0.14.1 (upstream signed
 binary license in its ZIP, retained as `client/WINTUN-LICENSE.txt`), and temporary

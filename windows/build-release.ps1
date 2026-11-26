@@ -45,8 +45,8 @@ FORTI SPLIT $releaseVersion — WINDOWS x64 (PREVIEW)
 в Windows Credential Manager. Пароль и 2FA не включаются в JSON-профиль.
 Для завершения нажмите «Отключить» и дождитесь восстановления сети.
 
-Выпуск предварительный, без подписи издателя. Автономные тесты не подтверждают
-реальный вход в конкретный VPN, вход в RDP или видеозвонок TrueConf.
+Выпуск предварительный. Для автообновления требуется подтверждение происхождения
+архива. Автономные тесты не подтверждают реальный вход в VPN, RDP или TrueConf.
 Если политика Windows запрещает запуск, обратитесь к администратору.
 
 Исходники и проверки: https://github.com/RelakRE/catalazhka_dlya_forti
@@ -60,6 +60,17 @@ $dotnetRoot=Split-Path (Get-Command dotnet).Source
 Get-ChildItem -LiteralPath $dotnetRoot -File | Where-Object Name -Match '(?i)license|notice' | Copy-Item -Destination $licenses
 $packagesRoot=$env:NUGET_PACKAGES
 if(!$packagesRoot){$packagesRoot=Join-Path $env:USERPROFILE '.nuget/packages'}
+Copy-Item -LiteralPath 'Sigstore-LICENSE.txt' -Destination $licenses
+$restore=Get-Content -LiteralPath 'FortiSplit.Work/obj/project.assets.json' -Raw | ConvertFrom-Json
+foreach($name in @('sigstore','tuf','bouncycastle.cryptography')){
+ $package=$restore.libraries.PSObject.Properties | Where-Object { $_.Name -like "$name/*" } | Select-Object -First 1
+ if(!$package){throw "Missing restored dependency: $name"}
+ $source=Join-Path $packagesRoot $package.Value.path
+ $notices=@(Get-ChildItem -LiteralPath $source -File | Where-Object Name -Match '(?i)license|notice')
+ if(!$notices.Count){throw "Missing dependency license notices: $name"}
+ $target=New-Item -ItemType Directory -Path (Join-Path $licenses $name)
+ $notices | Copy-Item -Destination $target
+}
 foreach($pack in @('microsoft.netcore.app.runtime.win-x64','microsoft.windowsdesktop.app.runtime.win-x64')){
  $packRoot=Join-Path $packagesRoot $pack
  if(Test-Path -LiteralPath $packRoot){

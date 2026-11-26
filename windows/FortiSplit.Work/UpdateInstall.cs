@@ -14,7 +14,8 @@ internal sealed record UpdateTicket(string OriginExe,string CurrentExe,int Paren
 internal static class UpdateInstall
 {
  private const string GateName=@"Local\FortiSplitWork-Update";
- internal const string ProofArchive=".fortisplit-release.zip",ProofSignature=ProofArchive+".sig";
+ internal const string ProofArchive=".fortisplit-release.zip",ProofSignature=ProofArchive+".sig",
+  ProofAttestation=ProofArchive+UpdateCatalog.AttestationSuffix;
  private static string Updates=>Path.Combine(Storage.Root,"updates");
  private static string Versions=>Path.Combine(Updates,"versions");
  private static string Staging=>Path.Combine(Updates,"staging");
@@ -58,7 +59,6 @@ internal static class UpdateInstall
 
  internal static VerifiedExecutable OpenVerifiedExecutable(string path,string? publisherKey)
  {
-  if(string.IsNullOrEmpty(publisherKey))throw new IOException("Ключ издателя обновления отсутствует.");
   const uint directoryAccess=1,readAccess=0x80000000,backupSemantics=0x02000000,openReparsePoint=0x00200000;
   path=Path.GetFullPath(path);
   string directory=Path.GetDirectoryName(path)!;
@@ -74,15 +74,27 @@ internal static class UpdateInstall
     if(handle.IsInvalid)throw new Win32Exception(Marshal.GetLastWin32Error());
     Storage.RegularPath(parent);
    }
-   string archivePath=Path.Combine(directory,ProofArchive),signaturePath=Path.Combine(directory,ProofSignature);
-   Storage.RegularPath(archivePath);Storage.RegularPath(signaturePath);
+   string archivePath=Path.Combine(directory,ProofArchive),attestationPath=Path.Combine(directory,ProofAttestation);
+   bool hasAttestation=File.Exists(attestationPath);
+   if(!hasAttestation&&string.IsNullOrEmpty(publisherKey))
+    throw new IOException("Подтверждение обновления отсутствует. Распакуйте ZIP выпуска в отдельную папку и запустите «Forti Split.exe» оттуда.");
+   Storage.RegularPath(archivePath);
    using var archive=File.OpenRead(archivePath);
-   using var signature=File.OpenRead(signaturePath);
-   if(archive.Length is <=0 or >200L*1024*1024||signature.Length is <384 or >512)
+   if(archive.Length is <=0 or >200L*1024*1024)
     throw new IOException("Неверный размер данных проверки обновления.");
-   byte[] signatureBytes=new byte[(int)signature.Length];signature.ReadExactly(signatureBytes);
-   if(!UpdateDownload.VerifyPublisher(publisherKey,Convert.ToHexString(SHA256.HashData(archive)),signatureBytes))
-    throw new IOException("Подпись издателя обновления не прошла проверку.");
+   if(hasAttestation){
+    Storage.RegularPath(attestationPath);
+    byte[] proof=UpdateAttestation.Read(attestationPath);
+    Task.Run(()=>UpdateAttestation.Verify(archive,proof,CancellationToken.None)).GetAwaiter().GetResult();
+   }else{
+    string signaturePath=Path.Combine(directory,ProofSignature);
+    Storage.RegularPath(signaturePath);
+    using var signature=File.OpenRead(signaturePath);
+    if(signature.Length is <384 or >512)throw new IOException("Неверный размер подписи обновления.");
+    byte[] signatureBytes=new byte[(int)signature.Length];signature.ReadExactly(signatureBytes);
+    if(!UpdateDownload.VerifyPublisher(publisherKey!,Convert.ToHexString(SHA256.HashData(archive)),signatureBytes))
+     throw new IOException("Подпись издателя обновления не прошла проверку.");
+   }
    archive.Position=0;
    var image=OpenPath(path,readAccess,FileShare.Read,IntPtr.Zero,FileMode.Open,openReparsePoint,IntPtr.Zero);
    try{
@@ -129,6 +141,16 @@ internal static class UpdateInstall
   string? id=Environment.GetEnvironmentVariable("FORTISPLIT_UPDATE_READY");
   if(!Guid.TryParseExact(id,"N",out _))return false;
   try{using var ready=EventWaitHandle.OpenExisting(@"Local\FortiSplitUpdateStarted-"+id);return true;}catch(WaitHandleCannotBeOpenedException){return false;}
+ }
+
+ internal static bool CanConfirmLaunch(string? path,string? publisherKey)
+ {
+  // Check this build's proof before the previous installer commits the link.
+  if(path is null)return false;
+  try{
+   using var executable=OpenVerifiedExecutable(path,publisherKey);
+   return true;
+  }catch(Exception error) when(error is IOException or UnauthorizedAccessException or Win32Exception or CryptographicException or FormatException){return false;}
  }
 
  internal static void SignalReady()
@@ -184,8 +206,12 @@ internal static class UpdateInstall
   string temporary=Path.Combine(Staging,id),version=Path.Combine(Versions,id);Storage.Protect(temporary);
   bool launched=false;
   try{
-   byte[] signature=await UpdateDownload.VerifyRelease(release,cancellation);
+   byte[] proof=await UpdateDownload.DownloadProof(release,cancellation);
    string archive=Path.Combine(temporary,"release.zip");await UpdateDownload.Download(release,archive,cancellation);
+   if(release.HasBuildAttestation){
+    using var downloaded=File.OpenRead(archive);
+    await UpdateAttestation.Verify(downloaded,proof,cancellation);
+   }
    cancellation.ThrowIfCancellationRequested();
    await Task.Run(()=>{
      UpdateArchive.Extract(archive,version);Storage.Protect(version);
@@ -196,7 +222,7 @@ internal static class UpdateInstall
     if(Directory.Exists(client))UpdateRuntime.Copy(client,Path.Combine(version,"client"));
     Storage.Save(Path.Combine(version,".fortisplit-origin.json"),new UpdateMarker(origin));
     File.Move(archive,Path.Combine(version,ProofArchive));
-    File.WriteAllBytes(Path.Combine(version,ProofSignature),signature);
+    File.WriteAllBytes(Path.Combine(version,release.HasBuildAttestation?ProofAttestation:ProofSignature),proof);
    },cancellation);
    cancellation.ThrowIfCancellationRequested();
    using var parent=Process.GetCurrentProcess();

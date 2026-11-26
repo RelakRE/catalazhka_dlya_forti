@@ -193,8 +193,8 @@ internal static class OfflineChecks
   }catch(Exception error){RecordFailure("manual_recovery_handles_missing_process","verify_recovery",error);}
   finally{try{Directory.Delete(recoveryTest,true);}catch{}}
   string signatureTest=Path.Combine(Path.GetTempPath(),"FortiSplitSignatureCheck-"+Guid.NewGuid().ToString("N"));
-  try{checks["update_rejects_executable_different_from_signed_archive"]=OfflineUpdateChecks.RejectsDifferentExecutable(signatureTest);}
-  catch(Exception error){RecordFailure("update_rejects_executable_different_from_signed_archive","verify_update",error);}
+  try{OfflineUpdateChecks.CheckLaunchProof(signatureTest,checks);}
+  catch(Exception error){RecordFailure("update_launch_accepts_valid_proof","verify_update",error);}
   finally{try{Directory.Delete(signatureTest,true);}catch{}}
   foreach(bool previous in new[]{false,true}){
    string check=previous?"update_failure_restores_previous_link_and_profile":"update_failure_restores_original_and_profile";

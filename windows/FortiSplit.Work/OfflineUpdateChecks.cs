@@ -58,7 +58,7 @@ internal static class OfflineUpdateChecks
             && restarted == current && linkRestored && File.ReadAllBytes(settings).SequenceEqual(profile);
     }
 
-    internal static bool RejectsDifferentExecutable(string directory)
+    internal static void CheckLaunchProof(string directory, Dictionary<string, bool> checks)
     {
         Directory.CreateDirectory(directory);
         string executable = Path.Combine(directory, "Forti Split.exe");
@@ -66,10 +66,17 @@ internal static class OfflineUpdateChecks
         using var publisher = RSA.Create(3072);
         string key = Convert.ToBase64String(publisher.ExportSubjectPublicKeyInfo());
         SignExecutable(executable, publisher);
-        using (UpdateInstall.OpenVerifiedExecutable(executable, key)) { }
+        checks["update_launch_accepts_valid_proof"] = UpdateInstall.CanConfirmLaunch(executable, key);
+        checks["update_launch_requires_embedded_key"] = !UpdateInstall.CanConfirmLaunch(executable, null);
+
         File.WriteAllText(executable, "modified");
-        try { using var unverified = UpdateInstall.OpenVerifiedExecutable(executable, key); return false; }
-        catch (IOException) { return true; }
+        checks["update_rejects_executable_different_from_signed_archive"] = !UpdateInstall.CanConfirmLaunch(executable, key);
+
+        File.WriteAllText(executable, "original");
+        File.Delete(Path.Combine(directory, UpdateInstall.ProofSignature));
+        checks["legacy_update_without_proof_cannot_confirm_launch"] = !UpdateInstall.CanConfirmLaunch(executable, key);
+        File.WriteAllText(Path.Combine(directory, UpdateInstall.ProofAttestation), "{}");
+        checks["invalid_build_attestation_cannot_confirm_launch"] = !UpdateInstall.CanConfirmLaunch(executable, null);
     }
 
     private static void SignExecutable(string executable, RSA publisher)

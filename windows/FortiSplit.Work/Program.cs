@@ -13,6 +13,14 @@ internal static class Program
    catch(Exception error) when(error is IOException or System.ComponentModel.Win32Exception or InvalidOperationException or ArgumentException or UnauthorizedAccessException){return 2;}
   }
   ApplicationConfiguration.Initialize();
+  if(args.Length==3&&args[0]=="--verify-release-attestation"){
+   try{
+    using var archive=File.OpenRead(args[1]);
+    if(archive.Length is <=0 or >200L*1024*1024)return 1;
+    UpdateAttestation.Verify(archive,UpdateAttestation.Read(args[2]),CancellationToken.None).GetAwaiter().GetResult();
+    return 0;
+   }catch{return 1;}
+  }
   if(args.Length==2&&args[0]=="--complete-update")return UpdateInstall.Complete(args[1]);
   if(args.Length==1&&args[0]=="--prepare-runtime"){
    try{RuntimeSetup.Install(AppContext.BaseDirectory,Console.WriteLine,CancellationToken.None).GetAwaiter().GetResult();return 0;}catch{return 1;}
@@ -26,8 +34,10 @@ internal static class Program
    using var bmp=new Bitmap(form.Width,form.Height); form.DrawToBitmap(bmp,new Rectangle(Point.Empty,bmp.Size)); bmp.Save(Path.GetFullPath(args[1])); return 0;
   }
   if(args.Length!=0) return 2;
+  bool updateLaunch=UpdateInstall.IsUpdateLaunch();
+  if(updateLaunch&&!UpdateInstall.CanConfirmLaunch(Environment.ProcessPath,UpdateDownload.PublisherKey))return 1;
   UpdateInstall.VerifiedExecutable? forward;
-  if(UpdateInstall.IsUpdateLaunch())forward=UpdateInstall.ForwardTarget(true);
+  if(updateLaunch)forward=UpdateInstall.ForwardTarget(true);
   else using(var updateGate=UpdateInstall.AcquireLaunchGate()){
    if(updateGate is null){MessageBox.Show("Дождитесь завершения обновления.","Forti Split");return 1;}
    try{forward=UpdateInstall.ForwardTarget();}finally{updateGate.ReleaseMutex();}

@@ -38,10 +38,11 @@ Windows releases, including previews, with the expected Windows x64 ZIP. In Sett
 **Открыть выпуск** opens the project release page. An unavailable network does not
 block VPN use. The check sends no VPN profile, credentials or authentication codes.
 
-When a signed update is available, **Обновить** downloads and checks the release after
+When a verifiable update is available, **Обновить** downloads and checks the release after
 the user disconnects the VPN. The app verifies the archive's publisher signature
-against the public key embedded in the installed build, checks size and SHA-256,
-and installs into a separate LocalAppData folder. Settings are retained, and
+against the embedded public key for releases that use that format. GitHub releases
+use a Sigstore attestation from the project's Windows Release workflow on `main`.
+The app checks the archive size and SHA-256 and installs it into LocalAppData. Settings are retained, and
 the new worker reuses the protected VPN runtime if its versions match.
 The app retains the signed archive and checks the installed executable against it
 before handing off a launch or elevating an updated build for the first time.
@@ -49,9 +50,16 @@ If an older installation lacks that proof, open the release page to install it m
 The app switches to the new version only
 after preparation and restarts it; the previous installation remains available if
 the switch fails. **Открыть выпуск** remains available for manual installation.
-Automatic installation requires the restart marker, a matching `.zip.sig` asset,
-and an installed build with the publisher's public key. Builds without a key and
-releases without a signature use **Открыть выпуск** for manual installation.
+Automatic installation requires the restart marker and a `.zip.sigstore.json`
+attestation, or a `.zip.sig` and the corresponding embedded publisher key.
+Verification of a build attestation may need network access to refresh Sigstore
+trust data. **Открыть выпуск** remains available for releases without proof.
+
+To migrate from an older release without attestation support, including the published
+1.2.12 preview, extract the new release into a separate folder and launch
+`Forti Split.exe` from there. Update any existing shortcut to point to that file.
+The app reads the same Windows VPN profile and saved credentials. Later attested
+releases can be installed with **Обновить**.
 
 ## Build from source
 
@@ -75,6 +83,16 @@ To sign update archives, run the same script in PowerShell 7 with
 `-UpdateSigningThumbprint` set to the thumbprint of the publisher's 3072–4096-bit
 RSA certificate in `Cert:\CurrentUser\My`. The build embeds its public key and
 emits an RSA-PSS/SHA-256 `.zip.sig` asset. Keep the signing key outside the repository.
+
+### Publish a Windows release
+
+Update the version in `FortiSplit.Work.csproj` and add the corresponding section
+to `RELEASE-NOTES.md`. Merge those changes into `main`, then run the
+**Windows Release** workflow on `main`. The workflow runs offline validation,
+generates a GitHub Actions attestation for the ZIP, and verifies it with the
+built app before publishing both files. Developers with permission to run the
+workflow can publish without keeping a personal signing certificate or setting
+repository secrets. Windows Authenticode signing is independent.
 
 ## Profiles
 
