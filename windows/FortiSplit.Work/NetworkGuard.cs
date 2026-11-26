@@ -12,8 +12,10 @@ public static class FortiSplitNetworkGuard
     private const uint Persistent = 1;
     private const uint Block = 0x1001;
     private const uint UInt32 = 3;
+    private const uint ByteArray16 = 11;
     private const uint NotEqual = 10;
     private static readonly Guid OutboundIpv4 = new Guid("1e5c9fae-8a84-4135-a331-950b54229ecd");
+    private static readonly Guid OutboundIpv6 = new Guid("a3b3ab6b-3564-488c-9117-f34e82142763");
     private static readonly Guid Universal = new Guid("eebecc03-ced4-4380-819a-2734397b2b74");
     private static readonly Guid RemoteAddress = new Guid("b235ae9a-1d64-49b8-a44c-5ff3d9095045");
     private static readonly Guid InterfaceIndex = new Guid("667fd755-d695-434a-8af5-d3835a1259bc");
@@ -110,14 +112,12 @@ public static class FortiSplitNetworkGuard
 
     private static byte[] AddressBytes(string address)
     {
-        byte[] bytes = IPAddress.Parse(address).GetAddressBytes();
-        if (bytes.Length != 4) throw new ArgumentException("Expected IPv4 address.", "address");
-        return bytes;
+        return IPAddress.Parse(address).GetAddressBytes();
     }
 
     private static Guid FilterKey(Guid session, byte[] address)
     {
-        byte[] input = new byte[20];
+        byte[] input = new byte[16 + address.Length];
         session.ToByteArray().CopyTo(input, 0);
         address.CopyTo(input, 16);
         using (SHA256 sha = SHA256.Create())
@@ -130,19 +130,33 @@ public static class FortiSplitNetworkGuard
 
     private static void AddFilter(IntPtr engine, Guid session, uint tunnelIndex, byte[] address)
     {
-        // WFP UINT32 IPv4 addresses use host order, so the first octet is the high byte.
-        uint ipv4 = (uint)address[0] << 24 | (uint)address[1] << 16 | (uint)address[2] << 8 | address[3];
+        bool ipv6 = address.Length == 16;
         int size = Marshal.SizeOf(typeof(Condition));
-        IntPtr conditions = Marshal.AllocHGlobal(2 * size);
+        int conditionCount = ipv6 ? 1 : 2;
+        IntPtr conditions = Marshal.AllocHGlobal(conditionCount * size + (ipv6 ? address.Length : 0));
         try
         {
-            Marshal.StructureToPtr(new Condition { Field = RemoteAddress, Value = new Value { Type = UInt32, Data = ipv4 } }, conditions, false);
-            Marshal.StructureToPtr(new Condition { Field = InterfaceIndex, Match = NotEqual, Value = new Value { Type = UInt32, Data = tunnelIndex } }, IntPtr.Add(conditions, size), false);
+            Value remote;
+            if (ipv6)
+            {
+                // The IPv4-only VPN cannot carry these destinations on any interface.
+                IntPtr bytes = IntPtr.Add(conditions, size);
+                Marshal.Copy(address, 0, bytes, address.Length);
+                remote = new Value { Type = ByteArray16, Data = unchecked((ulong)bytes.ToInt64()) };
+            }
+            else
+            {
+                // WFP expects the first IPv4 octet in the high byte of the UINT32.
+                uint ipv4 = (uint)address[0] << 24 | (uint)address[1] << 16 | (uint)address[2] << 8 | address[3];
+                remote = new Value { Type = UInt32, Data = ipv4 };
+                Marshal.StructureToPtr(new Condition { Field = InterfaceIndex, Match = NotEqual, Value = new Value { Type = UInt32, Data = tunnelIndex } }, IntPtr.Add(conditions, size), false);
+            }
+            Marshal.StructureToPtr(new Condition { Field = RemoteAddress, Value = remote }, conditions, false);
             var filter = new Filter
             {
                 Key = FilterKey(session, address), Name = "Forti Split work address protection",
-                Flags = Persistent, Layer = OutboundIpv4, Sublayer = Universal,
-                ConditionCount = 2, Conditions = conditions, Action = new Action { Type = Block }
+                Flags = Persistent, Layer = ipv6 ? OutboundIpv6 : OutboundIpv4, Sublayer = Universal,
+                ConditionCount = (uint)conditionCount, Conditions = conditions, Action = new Action { Type = Block }
             };
             Check(FwpmFilterAdd0(engine, ref filter, IntPtr.Zero, IntPtr.Zero));
         }

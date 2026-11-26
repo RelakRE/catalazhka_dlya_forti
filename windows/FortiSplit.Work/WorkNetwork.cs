@@ -22,8 +22,12 @@ public sealed record WorkTrafficSnapshot(long Timestamp, WorkPeerTraffic[] Peers
 internal sealed record ResolvedWorkHost(string Host, string[] Addresses);
 
 internal sealed record WorkNetwork(string Guid, uint Index, string Address, string Stage, ResolvedWorkHost[]? Resolved,
-    string? Generation = null, string[]? Unresolved = null, string[]? Deferred = null)
+    string? Generation = null, string[]? Unresolved = null, string[]? Deferred = null, string[]? GatewayConflicts = null)
 {
+    internal string GatewayConflictNotice => GatewayConflicts is { Length: > 0 } conflicts
+        ? $" Пропущено рабочих адресов, совпавших с VPN-шлюзом: {conflicts.Length}."
+        : "";
+
     internal IPAddress? TunnelAddress()
     {
         if (!System.Guid.TryParse(Guid, out var id) || !IPAddress.TryParse(Address, out var address) ||

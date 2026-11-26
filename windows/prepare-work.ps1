@@ -15,4 +15,4 @@ if ($LASTEXITCODE -ne 0) { throw 'Publish failed' }
 if ($LASTEXITCODE -ne 0) { throw 'C# checks failed' }
 & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -File (Join-Path $PSScriptRoot 'test_work_network.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Network simulation failed' }
-Write-Host 'Build ready. Runtime required in client/. Setup did not connect VPN.'
+Write-Host 'Build ready. The worker prepares its protected runtime on first connection.'

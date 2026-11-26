@@ -9,6 +9,7 @@ internal sealed record AuthSession(string Cookie,string ConnectUrl,string Resolv
 internal static class NativeAuth
 {
  private const string Library="libopenconnect-5.dll";
+ internal static string RuntimeDirectory { private get; set; } = AppContext.BaseDirectory;
  [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int Cert(IntPtr data,IntPtr reason);
  [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int FormCallback(IntPtr data,IntPtr form);
  // Windows x64 passes the first printf argument in the fourth argument slot.
@@ -35,7 +36,7 @@ internal static class NativeAuth
  [DllImport("ws2_32.dll")] private static extern int WSAStartup(ushort version,byte[] data);
  [DllImport("ws2_32.dll")] private static extern int WSACleanup();
  static NativeAuth() => NativeLibrary.SetDllImportResolver(typeof(NativeAuth).Assembly,ResolveLibrary);
- private static IntPtr ResolveLibrary(string name,Assembly assembly,DllImportSearchPath? search) => name==Library?NativeLibrary.Load(Path.Combine(AppContext.BaseDirectory,"client",name),assembly,DllImportSearchPath.UseDllDirectoryForDependencies|DllImportSearchPath.SafeDirectories):IntPtr.Zero;
+ private static IntPtr ResolveLibrary(string name,Assembly assembly,DllImportSearchPath? search) => name==Library?NativeLibrary.Load(Path.Combine(RuntimeDirectory,"client",name),assembly,DllImportSearchPath.UseDllDirectoryForDependencies|DllImportSearchPath.System32):IntPtr.Zero;
  private static string Text(IntPtr p,int max=4096) {if(p==IntPtr.Zero)return "";var result=Marshal.PtrToStringUTF8(p)??"";return result[..Math.Min(result.Length,max)];}
  internal static string ValidateAbi() {
   if(IntPtr.Size!=8||Marshal.SizeOf<Option>()!=56||Marshal.SizeOf<Form>()!=72||Marshal.SizeOf<Select>()!=72)throw new IOException("Unsupported OpenConnect ABI");

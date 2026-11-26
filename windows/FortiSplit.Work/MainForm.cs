@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Principal;
 using System.Text.Json;
 
 namespace FortiSplit.Work;
@@ -18,7 +19,8 @@ internal sealed partial class MainForm : Form
  private readonly NumericUpDown tcPort=new(){Minimum=1,Maximum=65535,Value=4307,Width=120};
  private readonly System.Windows.Forms.Timer poll=new(){Interval=500};
  private NotifyIcon? tray; private Process? worker; private EventWaitHandle? stop;
- private string? folder; private bool launched, closing, polling, stopRequested, recovering; private DateTime? connectedAt;
+ private string? folder, inputFolder; private bool launched, closing, polling, stopRequested, recovering; private DateTime? connectedAt;
+ private FileStream? bootstrapSource;
  private Status status=new("disconnected","Перед подключением отключите FortiClient.",Restored:true);
  private readonly TabControl tabs=new(){Dock=DockStyle.Fill}; private readonly List<Control> options=[];
  private static Button Btn(string text)=>new(){Text=text,Width=210,Height=44,FlatStyle=FlatStyle.Flat,Margin=new Padding(0,6,12,6)};
@@ -77,7 +79,7 @@ internal sealed partial class MainForm : Form
     StartUpdateChecks();if(initial.ConnectOnOpen)Try(Start);
    };
   }
-  FormClosing+=(_,e)=>{if(worker is not null && !worker.HasExited){e.Cancel=true;closing=true;RequestStop();ShowWindow();}else{poll.Stop();StopUpdateChecks();CancelAuth();tray?.Dispose();stop?.Dispose();worker?.Dispose();}};
+  FormClosing+=(_,e)=>{if(worker is not null && !worker.HasExited){e.Cancel=true;closing=true;RequestStop();ShowWindow();}else{poll.Stop();StopUpdateChecks();CancelAuth();tray?.Dispose();stop?.Dispose();worker?.Dispose();bootstrapSource?.Dispose();}};
  }
  private void Try(Action action){try{action();}catch(Exception e){detail.Text=e.Message;MessageBox.Show(e.Message,"Forti Split");}}
  private void Choose(TextBox field,string filter){using var dialog=new OpenFileDialog{Filter=filter,CheckFileExists=true};if(dialog.ShowDialog()==DialogResult.OK)field.Text=dialog.FileName;}
@@ -89,26 +91,48 @@ internal sealed partial class MainForm : Form
   if(status.Stage=="recovery_required")throw new IOException("Сначала нажмите «Восстановить сеть» и дождитесь подтверждения очистки. Затем подключитесь заново.");
   Config c=Save();string id=Guid.NewGuid().ToString("N");string sessionFolder=Storage.SessionPath(id);
   Storage.Protect(sessionFolder);Storage.Save(Path.Combine(sessionFolder,"config.json"),c);
-  using var self=Process.GetCurrentProcess(); var info=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=true,Verb="runas",WindowStyle=ProcessWindowStyle.Hidden};
-  foreach(var arg in new[]{"--worker",id,self.Id.ToString(),self.StartTime.ToUniversalTime().Ticks.ToString()})info.ArgumentList.Add(arg);
+  var info=WorkerStartInfo("worker",id);
   var sessionStop=new EventWaitHandle(false,EventResetMode.ManualReset,Worker.StopName(id));
   int workerId;
   try {
    BeginAuth(id);
-   workerId=StartWorker(info,sessionFolder);
+   workerId=StartWorker(info,WorkerOutput(id));
   }catch{
    CancelAuth();authStop?.Dispose();authStop=null;sessionStop.Dispose();throw;
   }
-  stop?.Dispose();stop=sessionStop;
+  stop?.Dispose();stop=sessionStop;inputFolder=sessionFolder;
   _=ServeAuth(workerId,c);
   trafficSession=null;
   workRequest=null;launched=false;stopRequested=false;recovering=false;closing=false;connectedAt=null;status=new("preparing","Подключаем VPN…");RefreshUi();
  }
+ private static string WorkerOutput(string id)
+ {
+  using var identity=WindowsIdentity.GetCurrent();
+  return NetworkScripts.SessionPath(identity.User!.Value,id);
+ }
+ private static ProcessStartInfo WorkerStartInfo(string mode,string id)
+ {
+  string installed=NetworkScripts.WorkerExecutable;
+  bool bootstrap=!File.Exists(installed);
+  var info=new ProcessStartInfo(bootstrap?Environment.ProcessPath!:installed){
+   UseShellExecute=true,Verb="runas",WindowStyle=ProcessWindowStyle.Hidden,
+   WorkingDirectory=Environment.GetFolderPath(Environment.SpecialFolder.System)
+  };
+  using var self=Process.GetCurrentProcess();
+  foreach(var arg in new[]{(bootstrap?"--bootstrap-":"--")+mode,id,self.Id.ToString(),self.StartTime.ToUniversalTime().Ticks.ToString()})
+   info.ArgumentList.Add(arg);
+  return info;
+ }
  private int StartWorker(ProcessStartInfo info,string sessionFolder)
  {
-  var next=Process.Start(info)??throw new IOException("Не удалось запустить сетевой компонент.");
-  worker?.Dispose();worker=next;folder=sessionFolder;
-  return next.Id;
+  FileStream? source=info.ArgumentList.FirstOrDefault()?.StartsWith("--bootstrap-",StringComparison.Ordinal)==true
+   ? File.OpenRead(info.FileName) : null;
+  try{
+   var next=Process.Start(info)??throw new IOException("Не удалось запустить сетевой компонент.");
+   worker?.Dispose();worker=next;folder=sessionFolder;
+   bootstrapSource?.Dispose();bootstrapSource=source;source=null;
+   return next.Id;
+  }finally{source?.Dispose();}
  }
   private void RequestStop(){if(recovering || worker is null || worker.HasExited)return;stopRequested=true;CancelAuth();stop?.Set();status=new("disconnecting","Ожидаем отключения и очистки сети…");RefreshUi();}
  private void Poll()
@@ -139,24 +163,45 @@ internal sealed partial class MainForm : Form
  private void Recover()
  {
    if(recovering || worker is not null&&!worker.HasExited)throw new IOException("Сначала отключите текущий VPN-сеанс.");
-   string id=Guid.NewGuid().ToString("N"),resultFolder=Storage.SessionPath(id);
-   Storage.Protect(resultFolder);
-   using var self=Process.GetCurrentProcess();
-   var info=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=true,Verb="runas",WindowStyle=ProcessWindowStyle.Hidden};
-   foreach(var arg in new[]{"--recover",id,self.Id.ToString(),self.StartTime.ToUniversalTime().Ticks.ToString()})info.ArgumentList.Add(arg);
-   StartWorker(info,resultFolder);
-   stop?.Dispose();stop=null;stopRequested=false;workRequest=null;connectedAt=null;
+   string id=Guid.NewGuid().ToString("N");
+   StartWorker(WorkerStartInfo("recover",id),WorkerOutput(id));
+   stop?.Dispose();stop=null;stopRequested=false;workRequest=null;connectedAt=null;inputFolder=null;
    recovering=true;status=new("disconnecting","Восстанавливаем сеть…");launched=true;RefreshUi();
  }
   private void CompleteWorker(int exitCode)
  {
+   bootstrapSource?.Dispose();bootstrapSource=null;
    if(exitCode==Worker.AccountMismatchExitCode){
     status=new(recovering?"recovery_required":"error",Worker.AccountMismatchMessage);
     CancelAuth();
     worker?.Dispose();worker=null;stop?.Dispose();stop=null;
-   }else if(status.Stage is not ("disconnected" or "error" or "recovery_required"))
-    status=new("recovery_required","Не удалось подтвердить восстановление сети.");
+   }else{
+    if(recovering&&folder is not null)FinishRecovery(folder);
+    if(exitCode==2&&!recovering&&status.Stage=="preparing")
+     status=new("error","Не удалось запустить сетевой компонент. Проверьте права доступа и повторите подключение.");
+    else if(status.Stage is not ("disconnected" or "error" or "recovery_required"))
+     status=new("recovery_required","Не удалось подтвердить восстановление сети.");
+   }
    recovering=false;
+ }
+ private void FinishRecovery(string resultFolder)
+ {
+  string report=Path.Combine(resultFolder,"recovered-sessions.json");
+  if(!File.Exists(report))return;
+  try{
+   foreach(var session in Storage.Read<RecoveredSession[]>(report)){
+    string legacy=Storage.SessionPath(session.Id);
+    if(!Directory.Exists(legacy))continue;
+    if(session.Network)File.Delete(Path.Combine(legacy,"network.json"));
+    if(session.Client)File.Delete(Path.Combine(legacy,"vpn-process.json"));
+   }
+   if(status.Restored&&Storage.SessionsWithRecoveryFiles().Any())
+    status=new("recovery_required","Найдена копия старого журнала без защищённого оригинала. Для восстановления сети обратитесь к администратору.");
+  }catch(IOException){
+   status=new("recovery_required","Не удалось очистить старые локальные отчёты. Повторите восстановление сети.");
+  }catch(UnauthorizedAccessException){
+   status=new("recovery_required","Нет доступа к старым локальным отчётам.");
+  }
  }
  private void OpenLog(){string path=folder??Storage.Root;var info=new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),"explorer.exe")){UseShellExecute=true};info.ArgumentList.Add(path);Process.Start(info)?.Dispose();}
  private void RefreshUi(){

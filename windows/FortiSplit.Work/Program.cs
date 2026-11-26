@@ -6,9 +6,10 @@ internal static class Program
  [STAThread] private static int Main(string[] args)
  {
   if(!OperatingSystem.IsWindows() || !Environment.Is64BitProcess) return 2;
-  if(args.Length==4 && args[0] is ("--worker" or "--recover") && Guid.TryParseExact(args[1],"N",out var session) &&
+  if(args.Length==4 && args[0] is ("--worker" or "--recover" or "--bootstrap-worker" or "--bootstrap-recover") && Guid.TryParseExact(args[1],"N",out var session) &&
      int.TryParse(args[2],out int pid) && pid>0 && long.TryParse(args[3],out long ticks)){
-   try{return args[0]=="--worker"?Worker.Run(session.ToString("N"),pid,ticks):Worker.Recover(session.ToString("N"),pid,ticks);}
+   bool bootstrap=args[0].StartsWith("--bootstrap-",StringComparison.Ordinal);
+   try{return args[0].EndsWith("worker",StringComparison.Ordinal)?Worker.Run(session.ToString("N"),pid,ticks,bootstrap):Worker.Recover(session.ToString("N"),pid,ticks,bootstrap);}
    catch(Exception error) when(error is IOException or System.ComponentModel.Win32Exception or InvalidOperationException or ArgumentException or UnauthorizedAccessException){return 2;}
   }
   ApplicationConfiguration.Initialize();
@@ -34,7 +35,7 @@ internal static class Program
   if(forward is not null){try{using var next=Process.Start(new ProcessStartInfo(forward){UseShellExecute=true});if(next is null)throw new IOException();return 0;}catch(Exception){if(!UpdateInstall.ResetForward(forward)){MessageBox.Show("Не удалось открыть обновлённую версию.","Forti Split");return 1;}MessageBox.Show("Не удалось открыть обновлённую версию. Запускаем прежнюю.","Forti Split");}}
   using var mutex=new Mutex(true,@"Local\FortiSplitWork-UI",out bool first);
   if(!first) { MessageBox.Show("Forti Split уже открыт. Найдите значок рядом с часами."); return 0; }
-  try { if(!RuntimeSetup.Ensure())return 1; Storage.Protect(Storage.Root); UpdateInstall.RemoveOldStaging(); Application.Run(new MainForm(false)); return 0; }
+  try { Storage.Protect(Storage.Root); UpdateInstall.RemoveOldStaging(); Application.Run(new MainForm(false)); return 0; }
   catch(Exception e) { MessageBox.Show(e.Message,"Forti Split"); return 1; }
  }
 }

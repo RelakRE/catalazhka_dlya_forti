@@ -120,7 +120,7 @@ internal static class UpdateInstall
      if(UpdateCatalog.CurrentVersion(FileVersionInfo.GetVersionInfo(executable).ProductVersion??"")!=release.Version)
       throw new IOException("Версия подписанного приложения не совпадает с выпуском.");
     string client=Path.Combine(Path.GetDirectoryName(current)!,"client");Storage.RegularPath(client);
-    UpdateRuntime.Copy(client,Path.Combine(version,"client"));
+    if(Directory.Exists(client))UpdateRuntime.Copy(client,Path.Combine(version,"client"));
     Storage.Save(Path.Combine(version,".fortisplit-origin.json"),new UpdateMarker(origin));
    },cancellation);
    cancellation.ThrowIfCancellationRequested();

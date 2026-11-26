@@ -6,10 +6,14 @@
   answers and OTPs are not eligible for saving.
 - The elevated worker and UI exchange bounded messages over a current-user named pipe.
   Both sides verify the peer PID. Plaintext responses exist transiently in process memory.
-- The worker installs its embedded network scripts under `Program Files\Forti Split Network`.
-  Administrators and SYSTEM control this directory. Each build has its own scripts,
-  and a protected recovery journal records the tunnel adapter GUID. The session
-  directory contains a copy of the journal for the desktop interface.
+- The first UAC-approved run of a build installs its worker and embedded network
+  scripts under `Program Files\Forti Split Network`. The worker prepares the VPN
+  runtime from archives verified against pinned SHA-256 values and checks installed
+  files against a protected manifest on subsequent connections.
+- Administrators and SYSTEM control the installed files and the recovery journals.
+  The worker reads configuration and requests from LocalAppData and writes status,
+  logs and session files in Program Files. The desktop account can read its own
+  session output. The protected recovery journal records the tunnel adapter GUID.
 - Authentication cookies are passed to OpenConnect over stdin, never in argv or files.
   Console output is drained without logging. Native library progress text is discarded;
   only validated numeric HTTP status codes and fixed authentication events are retained.
@@ -25,18 +29,21 @@
 - Route, ICMP and TCP checks run on request for one chosen IPv4. ICMP and TCP are
   attempted only for VPN routes, with the VPN source address. Normal Disconnect/Exit
   removes session changes. After an unexpected failure, use Restore Network; until
-  then, recorded routes/DNS settings and a remaining VPN process can persist.
-  Manual recovery uses only the protected journals. It checks the recorded PID,
-  creation time and executable path before stopping that process.
+  then, recorded routes, DNS, filters and a remaining VPN process can persist.
+  An elevated administrator can recover protected journals across accounts.
+  Recovery checks the recorded PID, creation time and executable path before
+  stopping a process.
 - During reconnect, packet filters block traffic to known work IPv4 and VPN DNS
   servers on other interfaces. The protected journal tracks the filters for cleanup.
-- Profiles and session reports in LocalAppData contain private names, IPs and local paths.
+- The IPv4-only tunnel also blocks IPv6 destinations observed in VPN DNS AAAA
+  answers for configured work names. Coverage follows the addresses observed
+  during setup, retries, reconnect and explicit updates.
+- Profiles and session reports contain private names, IPs and local paths.
   Keep these and the protected recovery journal out of Git. A private export is not encrypted.
-- Live work-address updates use a bounded hostname/IPv4 and DNS-domain request under
-  the private session directory. They cannot replace authentication or run commands.
+- Live work-address updates accept a bounded hostname/IPv4 and DNS-domain request.
   Route refresh removes only recorded session-owned routes and preserves shared IPs.
-- This portable app trusts its runtime and current user. It is not a hardened service
-  against a local administrator. Stop the VPN before replacing runtime files.
+  The worker reports success after routes, DNS, filters and the session config commit.
+- Initial installation of each worker build trusts the app package approved in UAC.
 
 Only the contents of the audited public export should be published. Existing local
 archives, older builds and research notes belong in ignored private storage.

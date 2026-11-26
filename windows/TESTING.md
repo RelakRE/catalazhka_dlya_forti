@@ -16,9 +16,11 @@ RDP and TrueConf endpoints. Record the tested commit, Windows build, app and VPN
 runtime versions, and pass/fail for each step. Keep profiles, addresses and
 unredacted captures in the test environment.
 
-1. Start from a fresh copy of the release ZIP. Complete runtime preparation,
-   import a test profile, connect, and accept UAC and MFA. The UI reaches the
-   ready state only after the tunnel setup. Cancel one MFA attempt and retry.
+1. Start from a fresh copy of the release ZIP. Import a test profile, connect,
+   approve UAC and wait for the protected runtime to be prepared. Complete MFA.
+   On the next connection, check the worker runs from Program Files. Confirm
+   the desktop can read its session output and cannot modify it. Cancel one MFA
+   attempt and retry.
 2. Open a work RDP session, join a TrueConf call with audio/video, and load a
    public site. Confirm the work routes use the VPN and the default internet
    route stays on the physical interface. Record route and DNS-rule ownership.
@@ -36,7 +38,9 @@ unredacted captures in the test environment.
    and a network change. Check that VPN readiness returns after route and DNS
    setup completes. If recovery is required, complete it and reconnect. Compare the
    default route and DNS rules with the first snapshot. Session-owned entries
-   should be removed and unrelated entries should remain.
+   should be removed and unrelated entries should remain. Use a dual-stack
+   test name and confirm the observed IPv6 address stays blocked during reconnect.
+   After an unexpected loss, repeat recovery from a second administrator account.
 6. Update a disposable copy from an older supported build and confirm the
    saved profile survives. In a controlled update-failure test, confirm the
    previous build opens and the same profile is retained.

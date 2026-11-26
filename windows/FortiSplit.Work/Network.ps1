@@ -1,9 +1,19 @@
-﻿param([ValidateSet('Hook','Resolve','Continue','Retry','Apply','Cleanup')][string]$Mode='Hook',[Parameter(Mandatory=$true)][string]$Session,[string]$Generation)
+﻿param([ValidateSet('Hook','Resolve','Continue','Retry','Apply','Cleanup')][string]$Mode='Hook',[Parameter(Mandatory=$true)][string]$Session,[string]$Generation,[string]$OwnerSid)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 3
+$env:PSModulePath=Join-Path $PSHOME 'Modules'
 $Session=[IO.Path]::GetFullPath($Session)
-$root=Join-Path $env:LOCALAPPDATA 'Forti Split Work\sessions'
-if ([IO.Path]::GetDirectoryName($Session) -ne $root -or [IO.Path]::GetFileName($Session) -notmatch '^[a-f0-9]{32}$') { throw 'Invalid session path' }
+$serverRoot=Split-Path -Parent $PSScriptRoot
+$root=Join-Path $serverRoot 'sessions'
+$currentSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+if (!$OwnerSid) { $OwnerSid=$currentSid }
+if (($Mode -ne 'Cleanup' -and $OwnerSid -ne $currentSid) -or
+    [Security.Principal.SecurityIdentifier]::new($OwnerSid).Value -cne $OwnerSid) { throw 'Invalid session owner' }
+$sessionName=[IO.Path]::GetFileName($Session)
+$prefix=$OwnerSid+'-'
+if ([IO.Path]::GetDirectoryName($Session) -ne $root -or !$sessionName.StartsWith($prefix,[StringComparison]::Ordinal) -or
+    $sessionName.Substring($prefix.Length) -cnotmatch '^[a-f0-9]{32}$') { throw 'Invalid session path' }
+$sessionId=$sessionName.Substring($prefix.Length)
 $sessionExists=Test-Path -LiteralPath $Session -PathType Container
 if (!$sessionExists -and ($Mode -ne 'Cleanup' -or (Test-Path -LiteralPath $Session))) { throw 'Invalid session directory' }
 for ($part=[IO.DirectoryInfo]::new($Session); $null -ne $part; $part=$part.Parent) {
@@ -14,12 +24,11 @@ $reconnectingPath=Join-Path $Session 'network-reconnecting'
 $hookErrorPath=Join-Path $Session 'network-hook-error.txt'
 $activeConfigPath=Join-Path $Session 'config.json'
 $routeLimit=256
-$sessionId=[IO.Path]::GetFileName($Session)
-$journalDirectory=Join-Path (Split-Path -Parent $PSScriptRoot) 'state'
-$journalBase=Join-Path $journalDirectory (([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)+'-'+$sessionId)
+$journalDirectory=Join-Path $serverRoot 'state'
+$journalBase=Join-Path $journalDirectory $sessionName
 $journalPath=$journalBase+'.json'
 $hookLeasePath=$journalBase+'.live'
-$tag='FortiSplitWork-'+[IO.Path]::GetFileName($Session)
+$tag='FortiSplitWork-'+$sessionId
 $mutex=New-Object Threading.Mutex($false,'Global\FortiSplitWork-Network')
 $locked=$false
 function Save-State {
@@ -49,6 +58,12 @@ function Test-IPv4([string]$IP) {
 function Assert-IP([string]$IP) {
  if (!(Test-IPv4 $IP)) { throw 'Invalid IPv4 or scope' }
 }
+function Get-IPv6([string]$IP) {
+ $parsed=$null
+ if ([Net.IPAddress]::TryParse($IP,[ref]$parsed) -and $parsed.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetworkV6 -and
+     !$parsed.IsIPv4MappedToIPv6 -and !$parsed.IsIPv6Multicast -and $parsed.ScopeId -eq 0 -and
+     !$parsed.Equals([Net.IPAddress]::IPv6Any) -and !$parsed.Equals([Net.IPAddress]::IPv6Loopback)) { return $parsed.ToString() }
+}
 function Assert-Host([string]$HostName) {
  if ($HostName.Length -gt 253 -or $HostName -notmatch '^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$') { throw 'Invalid work host' }
  foreach ($label in $HostName.Split('.')) { if ($label.Length -gt 63 -or $label.StartsWith('-') -or $label.EndsWith('-')) { throw 'Invalid label' } }
@@ -63,7 +78,7 @@ function Read-State {
  foreach ($prefix in $s.Routes) { if (-not $prefix.EndsWith('/32')) { throw 'Non-host recovery route' }; Assert-IP $prefix.Substring(0,$prefix.Length-3) }
  if($s.PSObject.Properties['Guarded']){
   if(@($s.Guarded).Count -gt 1024){throw 'Filter journal bound'}
-  foreach($ip in $s.Guarded){Assert-IP $ip}
+  foreach($ip in $s.Guarded){if (!(Test-IPv4 $ip) -and (Get-IPv6 $ip) -cne $ip){throw 'Invalid protected address'}}
  }
  return $s
 }
@@ -119,8 +134,8 @@ function Cleanup {
  if (@(Get-DnsClientNrptRule | Where-Object Comment -eq $tag).Count) { throw 'DNS cleanup not confirmed' }
  $guarded=@(Get-Guarded $s)
  if($guarded.Count){Set-PacketFilters 0 $guarded @()}
- if ($sessionExists -and (Test-Path -LiteralPath $statePath)) { Remove-Item -LiteralPath $statePath }
  if (Test-Path -LiteralPath $journalPath) { Remove-Item -LiteralPath $journalPath }
+ if ($sessionExists -and (Test-Path -LiteralPath $statePath)) { Remove-Item -LiteralPath $statePath -ErrorAction SilentlyContinue }
 }
 function Add-Route([string]$IP) {
  Assert-IP $IP; $prefix=$IP+'/32'
@@ -196,14 +211,18 @@ try {
   $dns=@($env:INTERNAL_IP4_DNS -split '\s+' | Where-Object { $_ })
   if ($dns.Count -lt 1 -or $dns.Count -gt 4) { throw 'Missing or excessive VPN DNS' }
   foreach ($ip in $dns) { Assert-IP $ip }
-  $literals=@($config.Hosts|Where-Object {Test-IPv4 $_})
-  $bootstrap=@($dns+$literals|Sort-Object -Unique)
   $gateway=$env:VPNGATEWAY
-  if($gateway -and $bootstrap -contains $gateway){throw 'Work addresses conflict with the VPN gateway'}
+  $peer=$null
+  if($gateway -and [Net.IPAddress]::TryParse($gateway.Trim([char[]]'[]'),[ref]$peer)){$gateway=$peer.ToString()}
+  # The outer VPN connection must keep its route on the physical interface.
+  $dns=@($dns|Where-Object {$_ -ne $gateway})
+  if(!$dns.Count){throw 'VPN DNS servers coincide with the VPN gateway'}
+  $literals=@($config.Hosts|Where-Object {$_ -ne $gateway -and (Test-IPv4 $_)})
+  $bootstrap=@($dns+$literals|Sort-Object -Unique)
   $script:state=Read-State
   $guarded=@();$retainedNames=@();$previousResolved=@()
   if ($null -ne $script:state) {
-   $guarded=@(@(Get-Guarded $script:state)+$bootstrap|Sort-Object -Unique)
+   $guarded=@(@(Get-Guarded $script:state)+$bootstrap|Where-Object {$_ -ne $gateway}|Sort-Object -Unique)
    Set-Guard $guarded $index
    $oldRule=Get-OwnedDnsRule
    if($null -ne $oldRule){$retainedNames=@($oldRule.Namespace)}
@@ -235,6 +254,10 @@ try {
  # This runs AFTER the synchronous OpenConnect hook, so tunnel receive stays live.
  $previousState=$script:state | ConvertTo-Json -Depth 8 | ConvertFrom-Json
  $previous=@($script:state.Resolved);$previousUnresolved=@();if($script:state.PSObject.Properties['Unresolved']){$previousUnresolved=@($script:state.Unresolved)}
+ $gateway=if($script:state.PSObject.Properties['Gateway']){$script:state.Gateway}
+ $previousConflicts=@()
+ if($script:state.PSObject.Properties['GatewayConflicts']){$previousConflicts=@($script:state.GatewayConflicts)}
+ $conflicts=@()
  $resolved=@(); $unresolved=@(); $deferred=@(); $dnsFailures=@()
  $hosts=@(@($config.Hosts)+$optionalHosts|Select-Object -Unique)
  $previousDeferred=@()
@@ -249,14 +272,15 @@ try {
  # A continuation spends its entire budget on names still waiting for a first query.
  $lookupTimer=[Diagnostics.Stopwatch]::new()
  foreach ($name in $hosts) {
-  $literal=$null; $addresses=@(); $queried=$false
+  $literal=$null; $addresses=@(); $ipv6=@(); $queried=$false; $gatewayMatch=$false
   $saved=@($previous|Where-Object Host -eq $name)
-  if ($Mode -eq 'Continue' -and $previousDeferred -notcontains $name) {
+  if (($Mode -eq 'Continue' -and $previousDeferred -notcontains $name) -or
+      ($Mode -eq 'Retry' -and $saved.Count -and $previousUnresolved -notcontains $name)) {
    if ($saved.Count) { $resolved+=@($saved[0]) }
    if ($previousUnresolved -contains $name) { $unresolved+=@($name) }
+   if ($previousConflicts -contains $name) { $conflicts+=@($name) }
    continue
   }
-  if($Mode -eq 'Retry' -and $saved.Count -and $previousUnresolved -notcontains $name){$resolved+=@($saved[0]);continue}
   if ([Net.IPAddress]::TryParse($name,[ref]$literal)) { Assert-IP $name; $addresses=@($name) }
   else {
    foreach ($server in $script:state.Dns) {
@@ -267,35 +291,41 @@ try {
      $queried=$true
      $lookupTimer.Start()
      try {
-      $query=@{Name=$name;Server=$server;Type='A';DnsOnly=$true;QuickTimeout=$true;ErrorAction='Stop'}
+     $query=@{Name=$name;Server=$server;Type='A_AAAA';DnsOnly=$true;QuickTimeout=$true;ErrorAction='Stop'}
       if ($tcp) { $query.TcpOnly=$true }
-      $addresses=@(Resolve-DnsName @query |
-       Where-Object { $_.PSObject.Properties['IPAddress'] -and $_.Type -eq 1 -and (Test-IPv4 $_.IPAddress) } |
+     $answers=@(Resolve-DnsName @query | Where-Object { $_.PSObject.Properties['IPAddress'] })
+      $addresses=@($answers | Where-Object { $_.Type -eq 1 -and (Test-IPv4 $_.IPAddress) } |
        Select-Object -ExpandProperty IPAddress -Unique)
+     $ipv6+=@($answers | Where-Object Type -eq 28 | ForEach-Object { Get-IPv6 $_.IPAddress })
+      if ($gateway -and $addresses -contains $gateway) { $gatewayMatch=$true }
+      $addresses=@($addresses|Where-Object {$_ -ne $gateway})
       if ($addresses.Count) { break }
      } catch { $dnsFailures+=@([pscustomobject]@{Host=$name;Server=$server;Transport=$(if($tcp){'TCP'}else{'UDP'});ErrorType=$_.Exception.GetType().Name}) }
     }
-    if ($addresses.Count) { break }
+     if ($addresses.Count) { break }
    }
    if (!$queried) { $deferred+=@($name) }
   }
-  if (-not $addresses.Count -or $addresses.Count -gt 16) {
-   $unresolved+=@($name)
+ $gatewayMatch=$gatewayMatch -or ($gateway -and ($addresses -contains $gateway -or $ipv6 -contains $gateway))
+ if($gatewayMatch){$conflicts+=@($name)}
+ $addresses=@($addresses|Where-Object {$_ -ne $gateway})
+ if (-not $addresses.Count -or $addresses.Count -gt 16) {
+  if(!$gatewayMatch -or $literal -eq $null){$unresolved+=@($name)}
    # Retain a working route during a transient DNS failure. Explicitly removed
    # names are not in this loop and therefore lose their routes below.
-   if($saved.Count){$resolved+=@($saved[0])}
-   continue
+  if($saved.Count){
+   $addresses=@($saved[0].Addresses|Where-Object {Test-IPv4 $_})
+   $ipv6+=@($saved[0].Addresses|ForEach-Object {Get-IPv6 $_})
+  }else{$addresses=@()}
   }
-  $resolved+=@([pscustomobject]@{Host=$name;Addresses=$addresses})
+ $answers=@($addresses+$ipv6|Where-Object {$_ -ne $gateway}|Sort-Object -Unique)
+ if($answers.Count){$resolved+=@([pscustomobject]@{Host=$name;Addresses=$answers})}
  }
  if (Test-Path -LiteralPath $reconnectingPath) { exit 3 }
  # Add replacement routes first, then retire only obsolete routes owned by this
  # session. Shared IPs and VPN DNS routes remain until their last user is removed.
- $desiredIps=@(@($script:state.Dns)+@($resolved|ForEach-Object Addresses)|Sort-Object -Unique)
- if($script:state.PSObject.Properties['Gateway'] -and $script:state.Gateway -and $desiredIps -contains $script:state.Gateway){
-  if($Mode -eq 'Apply'){$exitCode=2}
-  throw 'Work addresses conflict with the VPN gateway'
- }
+$guardedIps=@(@($script:state.Dns)+@($resolved|ForEach-Object Addresses)|Where-Object {$_ -ne $gateway}|Sort-Object -Unique)
+$desiredIps=@($guardedIps|Where-Object {Test-IPv4 $_})
  $desired=@($desiredIps|ForEach-Object {Assert-IP $_;$_+'/32'})
  if ($desired.Count -gt $routeLimit) {
   $exitCode=2
@@ -308,13 +338,17 @@ try {
  if ($null -ne $previousRule) { $previousNames=@($previousRule.Namespace) }
  $add=@($desired | Where-Object { $previousState.Routes -notcontains $_ })
  $remove=@($previousState.Routes | Where-Object { $desired -notcontains $_ })
+$backupConfig=Join-Path $Session 'previous-config.json'
+$configReplaced=$false
  try {
+ if ($Mode -eq 'Apply' -and [IO.File]::Exists($backupConfig)) { [IO.File]::Delete($backupConfig) }
   $script:state.Stage='resolving'; Save-State
-  Set-Guard @(@(Get-Guarded $previousState)+$desiredIps|Sort-Object -Unique) $script:state.Index
+ Set-Guard @(@(Get-Guarded $previousState)+$guardedIps|Sort-Object -Unique) $script:state.Index
   foreach ($prefix in $add) { Add-Route $prefix.Substring(0,$prefix.Length-3) }
   Set-WorkDns $names
   foreach ($prefix in $remove) { Remove-OwnedRoute $prefix }
   $script:state | Add-Member -NotePropertyName Unresolved -NotePropertyValue $unresolved -Force
+  $script:state | Add-Member -NotePropertyName GatewayConflicts -NotePropertyValue $conflicts -Force
   if ($Mode -eq 'Retry') {
    $script:state | Add-Member -NotePropertyName RetryDeferred -NotePropertyValue $deferred -Force
   } else {
@@ -322,10 +356,16 @@ try {
    $script:state | Add-Member -NotePropertyName RetryDeferred -NotePropertyValue @() -Force
   }
   $script:state | Add-Member -NotePropertyName DnsFailures -NotePropertyValue $dnsFailures -Force
-  $script:state.Resolved=$resolved; $script:state.Stage='ready'; Save-State
-  if ($Mode -eq 'Apply') { [IO.File]::Replace($configPath,$activeConfigPath,[NullString]::Value) }
+ if ($Mode -eq 'Apply') {
+  Set-Guard $guardedIps $script:state.Index
+  [IO.File]::Replace($configPath,$activeConfigPath,$backupConfig)
+  $configReplaced=$true
+ }
+ $script:state.Resolved=$resolved; $script:state.Stage='ready'; Save-State
  } catch {
   $failure=$_
+ if ($configReplaced) { [IO.File]::Replace($backupConfig,$activeConfigPath,[NullString]::Value) }
+ Set-Guard @(@(Get-Guarded $previousState)+@(Get-Guarded $script:state)|Sort-Object -Unique) $script:state.Index
   # Restore routes before reinstating their DNS policy, then remove candidate routes.
   foreach ($prefix in $remove) {
    if (!@(Get-OwnedRoute $prefix).Count) {
@@ -343,8 +383,6 @@ try {
   $exitCode=2
   throw $failure
  }
- # Retain prior answers across reconnects. An explicit changeset releases addresses it superseded.
- if ($Mode -eq 'Apply') { Set-Guard $desiredIps $script:state.Index }
  Clear-DnsClientCache -ErrorAction SilentlyContinue
 } catch {
  # No auth environment or secrets are written here.

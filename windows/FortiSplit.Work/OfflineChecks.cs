@@ -2,7 +2,9 @@ using System.IO.Pipes;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Net;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
+using System.Security.Principal;
 
 namespace FortiSplit.Work;
 
@@ -135,9 +137,23 @@ internal static class OfflineChecks
     NetworkScripts.InstallInto(scriptRoot);
     NetworkScripts.InstallInto(scriptRoot);
     checks["protected_script_install_is_repeatable"]=true;
+    string outputDirectory=Path.Combine(scriptRoot,"session-output");
+    NetworkScripts.EnsureDirectory(outputDirectory,identity.User);
+    NetworkScripts.EnsureDirectory(outputDirectory,identity.User);
+    string statusFile=Path.Combine(outputDirectory,"status.json");
+    Storage.Save(statusFile,new{Stage="offline"});
+    var rules=new FileInfo(statusFile).GetAccessControl().GetAccessRules(true,true,typeof(SecurityIdentifier))
+     .Cast<FileSystemAccessRule>().Where(rule=>rule.IdentityReference.Equals(identity.User)).ToArray();
+    checks["session_output_is_read_only_for_the_desktop"]=rules.Length==1&&
+     (rules[0].FileSystemRights&FileSystemRights.Read)==FileSystemRights.Read&&
+     (rules[0].FileSystemRights&(FileSystemRights.Write|FileSystemRights.Delete|FileSystemRights.ChangePermissions))==0;
    }
-   foreach(string name in new[]{"Network.ps1","network-hook.js"}){
+   foreach(string name in new[]{"Network.ps1","network-hook.js","NetworkGuard.cs"}){
     using var embedded=typeof(NetworkScripts).Assembly.GetManifestResourceStream(name);
+    if(!elevated&&name=="NetworkGuard.cs"){
+     checks["embedded_"+name]=embedded is {Length:>0};
+     continue;
+    }
     string path=elevated?Directory.GetFiles(scriptRoot,name,SearchOption.AllDirectories).Single():Path.Combine(AppContext.BaseDirectory,name);
     using var file=File.OpenRead(path);
     checks["embedded_"+name]=embedded is not null && SHA256.HashData(embedded).SequenceEqual(SHA256.HashData(file));
@@ -154,9 +170,12 @@ internal static class OfflineChecks
    File.WriteAllText(Path.Combine(journal,sid+"-"+orphanId+".json"),"{}");
    string processJournal=Path.Combine(journal,sid+"-"+orphanId+".vpn.json");
    Storage.Save(processJournal,new{Id=Environment.ProcessId,StartTicks=0L,Image=image});
-   File.WriteAllText(Path.Combine(journal,otherSid.Value+"-"+Guid.NewGuid().ToString("N")+".json"),"{}");
-   checks["recovery_discovers_protected_orphan_for_current_user"]=NetworkScripts.PendingSessions(journal,sid)
-    .Distinct().SequenceEqual(new[]{orphanId}) && !Directory.Exists(Path.Combine(recoveryTest,orphanId));
+   string otherId=Guid.NewGuid().ToString("N");
+   File.WriteAllText(Path.Combine(journal,otherSid.Value+"-"+otherId+".json"),"{}");
+   File.WriteAllText(Path.Combine(journal,"S-invalid-"+Guid.NewGuid().ToString("N")+".json"),"{}");
+   var pending=NetworkScripts.PendingSessions(journal).ToHashSet();
+   checks["recovery_discovers_protected_orphans_across_accounts"]=pending.SetEquals(new[]{(sid,orphanId),(otherSid.Value,otherId)})
+    && !Directory.Exists(Path.Combine(recoveryTest,orphanId));
    try{Worker.StopSavedClient(processJournal);checks["orphan_recovery_reads_protected_process_identity"]=false;}
    catch(IOException){checks["orphan_recovery_reads_protected_process_identity"]=true;}
   }catch(Exception error){RecordFailure("manual_recovery_handles_missing_process","verify_recovery",error);}

@@ -104,6 +104,7 @@ public sealed record Config
 
 public sealed record TunnelCounters(Guid AdapterId, long Received, long Sent);
 public sealed record Status(string Stage, string Message, bool Ready = false, bool Restored = false, TunnelCounters? TrafficStart = null, WorkTrafficSnapshot? WorkTraffic = null, string? NetworkGeneration = null);
+internal sealed record RecoveredSession(string Id, bool Network, bool Client);
 
 public readonly record struct ConnectionAction(string Text, bool Enabled, bool StopsSession)
 {

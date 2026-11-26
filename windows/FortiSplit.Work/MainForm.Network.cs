@@ -66,12 +66,12 @@ internal sealed partial class MainForm
  {
   bool active=worker is not null&&!worker.HasExited;
   if(!active){Save();settingsNotice.Text="Рабочие адреса сохранены. IP определятся при подключении.";return;}
-  if(folder is null||stopRequested||!LaunchGate.CanLaunch(status,true)||workRequest is not null||!Worker.NetworkReady(folder,status))throw new IOException("Дождитесь подключения VPN и завершения обновления адресов.");
+  if(folder is null||inputFolder is null||stopRequested||!LaunchGate.CanLaunch(status,true)||workRequest is not null||!Worker.NetworkReady(folder,status))throw new IOException("Дождитесь подключения VPN и завершения обновления адресов.");
   string[] hosts=WorkAddresses();
   string[] domains=dnsDomains.Text.Split([',',';','\r','\n',' '],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries);
   var request=new WorkAddressRequest(Guid.NewGuid().ToString("N"),hosts,domains);
   request.ApplyTo(Storage.Read<Config>(Path.Combine(folder,"config.json")));
-  Storage.Save(Path.Combine(folder,"work-address-request.json"),request);
+  Storage.Save(Path.Combine(inputFolder,"work-address-request.json"),request);
   workRequest=request;settingsNotice.Text="Обновляем адреса рабочих сайтов…";RefreshUi();
  }
  private void CheckWorkAddressResult()

@@ -2,33 +2,48 @@ using System.Diagnostics;
 using System.IO.Compression;
 using System.Net.Http;
 using System.Security.Cryptography;
+using System.Text.Json;
 
 namespace FortiSplit.Work;
 
 // Dependencies are downloaded by the end user from upstream, never bundled in releases.
 internal static class RuntimeSetup
 {
+ internal const string RuntimeVersion = "openconnect-9.21-wintun-0.14.1";
  internal static bool Ready(string root) => new[]{"openconnect.exe","libopenconnect-5.dll","libgnutls-30.dll","wintun.dll"}.All(name=>File.Exists(Path.Combine(root,"client",name)));
- internal static bool Ensure()
+
+ internal static async Task EnsureProtected(Action<string> progress, CancellationToken token)
  {
-  if(Ready(AppContext.BaseDirectory))return true;
-  using var window=new Form{Text="Подготовка Forti Split",ClientSize=new Size(570,190),StartPosition=FormStartPosition.CenterScreen,FormBorderStyle=FormBorderStyle.FixedDialog,MaximizeBox=false,MinimizeBox=false,Font=new Font("Segoe UI",10)};
-  var label=new Label{Text="Подготавливаем VPN-компоненты из официальных источников.\nНужен интернет; обычно это требуется один раз.",AutoSize=false,Bounds=new Rectangle(20,20,530,65)};
-  var progress=new ProgressBar{Style=ProgressBarStyle.Marquee,Bounds=new Rectangle(20,95,530,20)};
-  var cancel=new Button{Text="Отмена",Bounds=new Rectangle(430,135,120,32)};
-  window.Controls.AddRange([label,progress,cancel]);
-  using var cancellation=new CancellationTokenSource();bool completed=false,running=false;
-  cancel.Click+=(_,_)=>{cancellation.Cancel();cancel.Enabled=false;};
-  window.FormClosing+=(_,e)=>{if(running){e.Cancel=true;cancellation.Cancel();cancel.Enabled=false;}};
-  window.Shown+=async(_,_)=>{
-   running=true;
-   try{await Install(AppContext.BaseDirectory,message=>label.Text=message,cancellation.Token);completed=true;}
-   catch(OperationCanceledException){}
-   catch(Exception){MessageBox.Show(window,"Не удалось подготовить VPN-компоненты. Проверьте интернет и убедитесь, что приложение распаковано в доступную для записи папку. Затем попробуйте снова.","Forti Split",MessageBoxButtons.OK,MessageBoxIcon.Error);}
-   finally{running=false;window.Close();}
-  };
-  window.ShowDialog();return completed;
+  NetworkScripts.PrepareRuntimeDirectory();
+  string root = NetworkScripts.RuntimeDirectory;
+  string client = Path.Combine(root, "client");
+  string manifest = Path.Combine(root, "runtime-hashes.json");
+  Storage.RegularPath(client);
+  if (Ready(root) && File.Exists(manifest)) {
+   try {
+    var installed = Storage.Read<SortedDictionary<string, string>>(manifest);
+    var actual = await HashClient(client, token);
+    if (installed.Count == actual.Count && actual.All(file => installed.TryGetValue(file.Key, out var hash) && hash == file.Value))
+     return;
+   } catch (JsonException) { }
+  }
+  File.Delete(manifest);
+  if (Directory.Exists(client)) Directory.Delete(client, true);
+  await Install(root, progress, token);
+  Storage.Save(manifest, await HashClient(client, token));
  }
+
+ private static async Task<SortedDictionary<string, string>> HashClient(string client, CancellationToken token)
+ {
+  var hashes = new SortedDictionary<string, string>(StringComparer.Ordinal);
+  foreach (string file in Directory.EnumerateFiles(client)) {
+   Storage.RegularPath(file);
+   await using var stream = File.OpenRead(file);
+   hashes.Add(Path.GetFileName(file), Convert.ToHexString(await SHA256.HashDataAsync(stream, token)));
+  }
+  return hashes;
+ }
+
  internal static async Task Install(string root,Action<string> progress,CancellationToken token)
  {
   root=Path.GetFullPath(root);
@@ -38,6 +53,7 @@ internal static class RuntimeSetup
   string temporary=Path.Combine(root,".runtime-setup-"+Guid.NewGuid().ToString("N"));
   Directory.CreateDirectory(temporary);
   using var http=new HttpClient{Timeout=TimeSpan.FromMinutes(5)};
+  bool protectedRuntime = string.Equals(root, NetworkScripts.RuntimeDirectory, StringComparison.OrdinalIgnoreCase);
   try{
    async Task<string> Download(string name,string url,string sha){
     progress("Загружаем VPN-компонент: "+name+"\nVPN сейчас не подключается.");
@@ -56,7 +72,8 @@ internal static class RuntimeSetup
    string vpn=await Download("openconnect.exe","https://gitlab.com/api/v4/projects/openconnect%2Fopenconnect/jobs/artifacts/v9.21/raw/openconnect-installer-MinGW64-GnuTLS.exe?job=persist-windows-builds-for-tagged-releases","6EE9E8EB9BC59EF70BB0717DF7F99703F8A2CCD11D8E45D58A61F9A2E6EF7D00");
    string wintun=await Download("wintun.zip","https://www.wintun.net/builds/wintun-0.14.1.zip","07C256185D6EE3652E09FA55C0B673E2624B565E02C4B9091C79CA7D2F24EF51");
    async Task Extract(string executable,string archive,string destination){
-    var info=new ProcessStartInfo(executable){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
+   var info=new ProcessStartInfo(executable){UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Path.GetDirectoryName(executable)!,RedirectStandardOutput=true,RedirectStandardError=true};
+    if(protectedRuntime)NetworkScripts.SetSystemEnvironment(info,temporary);
     foreach(string arg in new[]{"x",archive,"-o"+destination,"-y"})info.ArgumentList.Add(arg);
     using var process=Process.Start(info)??throw new IOException("Cannot extract runtime");
     Task stdout=process.StandardOutput.ReadToEndAsync(),stderr=process.StandardError.ReadToEndAsync();

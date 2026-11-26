@@ -24,10 +24,12 @@ and session cookies are never saved in profiles or logs.
 
 Download the Windows preview tagged `windows-v…` from [Releases](https://github.com/RelakRE/catalazhka_dlya_forti/releases).
 Extract the complete archive and run `Forti Split.exe`. .NET is included.
-The first launch downloads and prepares upstream OpenConnect 9.21 and Wintun 0.14.1
-in a progress window, without a console. Internet and a writable app folder are
-required. Executable downloads are checked against pinned SHA256 values before use.
-Existing complete runtimes are reused. See [release notes](RELEASE-NOTES.md).
+On the first connection, UAC authorizes installation of the network worker.
+The worker downloads OpenConnect 9.21 and Wintun 0.14.1 into a protected folder in
+Program Files and verifies the upstream archives against pinned SHA-256 values.
+Internet access is required for that preparation. Later connections use the
+installed worker and verify the cached VPN runtime against its protected manifest.
+See [release notes](RELEASE-NOTES.md).
 
 ## Update notifications
 
@@ -39,8 +41,9 @@ block VPN use. The check sends no VPN profile, credentials or authentication cod
 When a signed update is available, **Обновить** downloads and checks the release after
 the user disconnects the VPN. The app verifies the archive's publisher signature
 against the public key embedded in the installed build, checks size and SHA-256,
-and installs into a separate LocalAppData folder. Existing VPN
-runtime files and settings are retained. The app switches to the new version only
+and installs into a separate LocalAppData folder. Settings are retained, and
+the new worker reuses the protected VPN runtime if its versions match.
+The app switches to the new version only
 after preparation and restarts it; the previous installation remains available if
 the switch fails. **Открыть выпуск** remains available for manual installation.
 Automatic installation requires the restart marker, a matching `.zip.sig` asset,
@@ -59,10 +62,10 @@ The verification command also requires Python 3. See [TESTING.md](TESTING.md)
 for test reports, source-only checks and Windows 11 VPN acceptance.
 
 Runtime binaries are excluded from this source tree and the release archive.
-The first launch prepares them from upstream automatically; `--prepare-runtime`
-performs only that preparation for automation, without connecting VPN.
-`prepare-work.ps1 -ClientDirectory <local-runtime-directory>` can alternatively
-copy an existing compatible local runtime. The native API binding supports the
+`--prepare-runtime` prepares a local copy for offline validation.
+`prepare-work.ps1 -ClientDirectory <local-runtime-directory>` can also
+copy an existing compatible runtime for testing. VPN connections use the
+worker's protected installation. The native API binding supports the
 OpenConnect 9.12 public ABI and is checked offline with 9.21 for this release.
 Run `./build-release.ps1` in a clean checkout to create and validate release assets.
 To sign update archives, run the same script in PowerShell 7 with
@@ -83,8 +86,13 @@ Full HTTP/HTTPS links are accepted and stored as hostnames. JSON profiles retain
 the existing hostname/IPv4 format. Optional private
 DNS suffixes in `DnsDomains` have no leading dot; each explicitly added hostname
 gets its own exact DNS rule even without a suffix. Redirects to another hostname
-require adding that hostname too. Work destinations use IPv4. The VPN gateway
-hostname can resolve to IPv4 or IPv6.
+require adding that hostname too. Work routes use IPv4. The VPN gateway
+hostname can resolve to IPv4 or IPv6. The worker checks A and AAAA answers for
+work names on the VPN DNS servers. It blocks the observed IPv6 destinations
+on all interfaces, as the tunnel only carries IPv4.
+An address that matches the VPN gateway is skipped so the VPN connection keeps
+its physical route. The app reports skipped work addresses and sets up the
+remaining routes.
 
 VPN DNS routes, optional literal IP routes and work-name/domain DNS rules are
 installed before any tunnel DNS query. DNS lookup runs after the synchronous
@@ -98,8 +106,9 @@ disconnect the VPN and its count appears in the connected status.
 While connected, edit the work addresses and DNS domains, then use the fixed
 **Применить рабочие адреса** button at the bottom of Settings. This resolves their
 current IPs without reconnecting or entering 2FA again and saves the profile after
-the network update succeeds. The elevated worker validates a bounded request in the
-private session directory; it cannot change the VPN server or authentication.
+the network update succeeds. The elevated worker validates a bounded request from
+the private user folder and applies it in a protected session directory. The
+request is limited to work addresses and DNS domains.
 Replacement routes are added before obsolete session-owned routes are removed.
 An IP shared by another work name or VPN DNS is retained. A temporary DNS failure
 keeps that name's previous routes; deleting the name explicitly removes routes
@@ -129,9 +138,9 @@ There are no periodic network diagnostics or internet probes.
 Disconnect/Exit removes the session's settings. The worker also attempts cleanup
 if the UI exits unexpectedly or network setup fails during reconnection. When the
 app reports that recovery is required, press Restore Network and approve UAC.
-The elevated worker can recover from a protected journal even if the local session
-directory is missing. It stops only the recorded VPN process and removes the
-app's own settings.
+The elevated worker can restore the app's machine-wide network changes from
+protected journals, including after the original Windows account is gone. It
+stops only recorded VPN processes and removes the app's own settings.
 Existing profiles and private credentials are reused.
 New sessions record the adapter GUID in a protected journal, so recovery follows
 a renamed tunnel. A legacy session with only a user-writable journal copy needs
