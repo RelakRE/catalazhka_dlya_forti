@@ -26,9 +26,9 @@ internal sealed partial class MainForm
   try{
    var result=await UpdateCheck.FindNewer(Application.ProductVersion,updateStop.Token);
    if(IsDisposed||updateStop.IsCancellationRequested)return;
-   availableUpdate=result;openUpdate.Enabled=result is not null;installUpdate.Enabled=result?.CanInstall==true;
+   availableUpdate=result;openUpdate.Enabled=result is not null;installUpdate.Enabled=UpdateDownload.CanInstall(result);
    if(result is null){updateBanner.Visible=false;updateInfo.Text="Новых версий не найдено.";}
-   else{updateInfo.Text=result.CanInstall?$"Доступна версия {result.Version}.":$"Доступна версия {result.Version}. Откройте выпуск для установки.";updateBanner.Text=$"Доступна версия {result.Version}. Настройки → Обслуживание.";updateBanner.Visible=true;}
+   else{updateInfo.Text=installUpdate.Enabled?$"Доступна версия {result.Version}.":$"Доступна версия {result.Version}. Откройте выпуск для установки.";updateBanner.Text=$"Доступна версия {result.Version}. Настройки → Обслуживание.";updateBanner.Visible=true;}
   }catch(OperationCanceledException) when(updateStop.IsCancellationRequested){}
   catch(Exception){if(!IsDisposed)updateInfo.Text="Не удалось проверить обновления.";}
  }
@@ -37,17 +37,17 @@ internal sealed partial class MainForm
 
  private async Task InstallAvailableUpdate()
  {
-  if(installingUpdate||availableUpdate?.CanInstall!=true)return;
+  if(installingUpdate||availableUpdate is not { } candidate||!UpdateDownload.CanInstall(candidate))return;
   if(worker is not null&&!worker.HasExited){updateInfo.Text="Сначала отключите VPN.";return;}
   try{
    if(status.Stage=="recovery_required"||Storage.SessionsWithRecoveryFiles().Any()){updateInfo.Text="Сначала восстановите сеть.";return;}
    installingUpdate=true;installUpdate.Enabled=false;updateInfo.Text="Скачиваем и проверяем обновление…";RefreshUi();
-   await UpdateInstall.Stage(availableUpdate,updateStop.Token);
+   await UpdateInstall.Stage(candidate,updateStop.Token);
    if(IsDisposed||updateStop.IsCancellationRequested)return;
    updateInfo.Text="Открываем новую версию…";Close();
   }catch(OperationCanceledException) when(updateStop.IsCancellationRequested){}
   catch(Exception){if(!IsDisposed)updateInfo.Text="Не удалось установить обновление. Прежняя версия сохранена.";}
-  finally{installingUpdate=false;if(!IsDisposed){installUpdate.Enabled=availableUpdate?.CanInstall==true;RefreshUi();}}
+  finally{installingUpdate=false;if(!IsDisposed){installUpdate.Enabled=UpdateDownload.CanInstall(availableUpdate);RefreshUi();}}
  }
 
  private void StopUpdateChecks()=>updateStop.Cancel();

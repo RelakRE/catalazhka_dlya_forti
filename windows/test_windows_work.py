@@ -50,8 +50,8 @@ class WorkSafety(unittest.TestCase):
         code = (SRC / 'Network.ps1').read_text(encoding='utf-8-sig')
         hook = code.split("if ($Mode -eq 'Hook') {", 1)[1].split('Get-NetAdapter -InterfaceIndex $script:state.Index', 1)[0]
         self.assertNotIn('Resolve-DnsName', hook)
-        self.assertIn('Add-DnsClientNrptRule', hook)
-        self.assertLess(hook.index('foreach($name in @($config.Hosts))'), hook.index("Stage='base_ready'"))
+        self.assertIn('Set-WorkDns', hook)
+        self.assertLess(hook.index('foreach($name in $literals)'), hook.index("Stage='base_ready'"))
 
     def test_worker_uses_the_same_stop_condition_during_auth_and_tunnel(self):
         code = (SRC / 'Worker.cs').read_text(encoding='utf-8')
@@ -68,6 +68,7 @@ class WorkSafety(unittest.TestCase):
         loop = worker.split('while(SessionActive())', 1)[1]
         self.assertIn('if(NetworkHookFailed(folder))', loop)
         self.assertIn('throw NetworkFailure(', loop)
+        self.assertIn('Stopwatch.GetElapsedTime(started)>=NetworkReadyLimit', loop)
         hook = (SRC / 'network-hook.js').read_text(encoding='utf-8')
         self.assertIn('"attempt-reconnect"', hook)
 

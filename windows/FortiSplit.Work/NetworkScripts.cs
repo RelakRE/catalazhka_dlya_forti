@@ -12,6 +12,7 @@ internal static class NetworkScripts
  internal static string PowerShellScript => Path.Combine(Root, BuildId, "Network.ps1");
  internal static string StateDirectory => Path.Combine(Root, "state");
  internal static string ClientJournal(string sid,string id) => Path.Combine(StateDirectory,sid+"-"+id+".vpn.json");
+ internal static string HookLease(string sid,string id) => Path.Combine(StateDirectory,sid+"-"+id+".live");
  internal static bool HasJournal(string sid,string id) => File.Exists(Path.Combine(StateDirectory,sid+"-"+id+".json"));
 
  internal static IEnumerable<string> PendingSessions(string directory,string sid)
@@ -64,7 +65,7 @@ internal static class NetworkScripts
   string stateDirectory = Path.Combine(directory, "state");
   Storage.RegularPath(stateDirectory);
   Directory.CreateDirectory(stateDirectory);
-  foreach (string name in new[] { "network-hook.js", "Network.ps1" }) {
+  foreach (string name in new[] { "network-hook.js", "Network.ps1", "NetworkGuard.cs" }) {
    string path = Path.Combine(versionDirectory, name);
    Storage.RegularPath(path);
    if (File.Exists(path)) continue;

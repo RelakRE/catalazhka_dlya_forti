@@ -11,6 +11,8 @@ internal static class Worker
 {
  private const int NetworkChangeRejected=2;
  private const int NetworkGenerationChanged=3;
+ private const int NetworkScriptTimeoutMilliseconds=60_000;
+ private static readonly TimeSpan NetworkReadyLimit=TimeSpan.FromSeconds(120);
  internal const int AccountMismatchExitCode=4;
  internal const string AccountMismatchMessage="Сетевой компонент должен работать под той же учётной записью, что и Forti Split. Для подключения или восстановления сети подтвердите UAC под этой учётной записью.";
  private const string SessionMutexName=@"Global\FortiSplitWork-Session";
@@ -46,16 +48,24 @@ internal static class Worker
   try { return ReadNetwork(folder) is {Stage:"ready"} network&&network.Generation==generation; }
   catch(Exception error) when(error is IOException or UnauthorizedAccessException or JsonException) { return false; }
  }
- internal static async Task<int> Script(string folder,string mode,string? generation=null)
+ private static int Script(string folder,string mode,string? generation=null)
  {
-  var info=new ProcessStartInfo(Storage.PowerShell) { UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true };
+  var info=new ProcessStartInfo(Storage.PowerShell) { UseShellExecute=false,CreateNoWindow=true };
   foreach(var arg in new[]{"-NoLogo","-NoProfile","-ExecutionPolicy","Bypass","-File",NetworkScripts.PowerShellScript,"-Mode",mode,"-Session",folder}) info.ArgumentList.Add(arg);
   if(generation is not null){info.ArgumentList.Add("-Generation");info.ArgumentList.Add(generation);}
   using var process=Process.Start(info) ?? throw new IOException("Не запущен сетевой обработчик.");
-  var stdout=process.StandardOutput.ReadToEndAsync(); var stderr=process.StandardError.ReadToEndAsync();
-  // Do not kill a network mutation mid-operation: parent/worker wait for its completion.
-  await process.WaitForExitAsync(); await Task.WhenAll(stdout,stderr);
+  if(!process.WaitForExit(NetworkScriptTimeoutMilliseconds)){
+   // Every mutation is journaled; cleanup serializes with the network mutex.
+   StopProcess(process,entireTree:true);
+   throw new IOException("Сетевой обработчик не завершился за отведённое время.");
+  }
   return process.ExitCode;
+ }
+ private static void StopProcess(Process process,bool entireTree=false)
+ {
+  try{if(!process.HasExited)process.Kill(entireTree);}
+  catch(InvalidOperationException) when(process.HasExited){ }
+  if(!process.WaitForExit(5000))throw new IOException("Не удалось остановить сетевой процесс.");
  }
  internal static bool ProcessUsesAccount(int pid,SecurityIdentifier sid)
  {
@@ -82,17 +92,16 @@ internal static class Worker
    throw;
   }
  }
- internal static void StopSavedClient(string folder,string? journalPath=null)
+ internal static void StopSavedClient(string journalPath)
  {
-  string path=journalPath is not null&&File.Exists(journalPath)?journalPath:Path.Combine(folder,"vpn-process.json");
-  if(!File.Exists(path))return;
-  VpnProcess saved=Storage.Read<VpnProcess>(path);
+  if(!File.Exists(journalPath))return;
+  VpnProcess saved=Storage.Read<VpnProcess>(journalPath);
   if(saved.Id==Environment.ProcessId||!Path.IsPathFullyQualified(saved.Image)||!Path.GetFileName(saved.Image).Equals("openconnect.exe",StringComparison.OrdinalIgnoreCase))throw new IOException("Неверные данные VPN-процесса.");
   Process child;try{child=Process.GetProcessById(saved.Id);}catch(ArgumentException){return;}
   using(child){
    if(child.HasExited||child.StartTime.ToUniversalTime().Ticks!=saved.StartTicks)return;
    if(!string.Equals(child.MainModule?.FileName,saved.Image,StringComparison.OrdinalIgnoreCase))throw new IOException("VPN-процесс не соответствует журналу. Его настройки не изменены.");
-   child.Kill();child.WaitForExit();
+   StopProcess(child);
   }
  }
  private static void ForgetClient(string folder,string? journalPath)
@@ -121,13 +130,20 @@ internal static class Worker
    NetworkScripts.Prepare();
    var sessions=NetworkScripts.PendingSessions(NetworkScripts.StateDirectory,sid)
     .Concat(Storage.SessionsWithRecoveryFiles()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+   bool legacyFound=false;
    foreach(string id in sessions){
     string folder=Storage.SessionPath(id),journalPath=NetworkScripts.ClientJournal(sid,id);
-    StopSavedClient(folder,journalPath);
-    if(Script(folder,"Cleanup").GetAwaiter().GetResult()!=0)
+    bool networkJournal=NetworkScripts.HasJournal(sid,id);
+    bool clientRecorded=File.Exists(journalPath);
+    bool unverifiedClient=!clientRecorded&&File.Exists(Path.Combine(folder,"vpn-process.json"));
+    legacyFound|=(!networkJournal&&File.Exists(Path.Combine(folder,"network.json")))||unverifiedClient;
+    File.Delete(NetworkScripts.HookLease(sid,id));
+    StopSavedClient(journalPath);
+    if(Script(folder,"Cleanup")!=0)
      throw new IOException("Не удалось подтвердить восстановление сети.");
-    ForgetClient(folder,journalPath);
+    if(clientRecorded)ForgetClient(folder,journalPath);
    }
+   if(legacyFound)throw new IOException("Найдена копия старого журнала без защищённого оригинала. Для восстановления сети обратитесь к администратору.");
    State(resultFolder,"disconnected",sessions.Length==0?"Незавершённых сетевых изменений не найдено.":"Сеть восстановлена.",restored:true);
    return 0;
   }catch(Exception error){
@@ -188,6 +204,7 @@ internal static class Worker
    },TraceAuth);
    if(StopRequested())throw new OperationCanceledException();
    if(!AllocConsole() || !SetConsoleCtrlHandler(handler,true)) throw new IOException("Не удалось подготовить VPN-процесс.");
+   using(File.Open(NetworkScripts.HookLease(sid,id),FileMode.CreateNew)){ }
    ShowWindow(GetConsoleWindow(),0);
    var info=new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory,"client","openconnect.exe")) { UseShellExecute=false,WorkingDirectory=AppContext.BaseDirectory,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true };
    foreach(var arg in new[]{"--protocol=fortinet","--interface="+TunnelTraffic.AdapterName,"--disable-ipv6","--no-proxy","--no-dtls","--force-dpd=60","--reconnect-timeout=60","--non-inter","--cookie-on-stdin","--resolve",login.Resolve,"--script",NetworkScripts.Hook}) info.ArgumentList.Add(arg);
@@ -210,11 +227,13 @@ internal static class Worker
    string statusPath=Path.Combine(folder,"status.json");
    var dnsRetries=new WorkDnsRetries();
    bool deferredDns=false;
+   long? waitingForNetwork=Stopwatch.GetTimestamp();
    bool SessionActive()=>!vpn.HasExited&&!StopRequested();
    bool? ShowNetworkReady(string expectedGeneration){
     if(NetworkReconnecting(folder)||NetworkHookFailed(folder)||
        ReadNetwork(folder) is not {Stage:"ready"} network||network.Generation!=expectedGeneration)return null;
     generation=expectedGeneration;
+     waitingForNetwork=null;
     trafficStart=null;
     if(Guid.TryParse(network.Guid,out var adapterId))
      trafficStart=existingCounters?.AdapterId==adapterId?existingCounters:new(adapterId,0,0);
@@ -251,7 +270,10 @@ internal static class Worker
    while(SessionActive()) {
     if(NetworkHookFailed(folder))
      throw NetworkFailure("Не удалось настроить сеть VPN. Смотрите network-hook-error.txt.");
+    if(waitingForNetwork is long started&&Stopwatch.GetElapsedTime(started)>=NetworkReadyLimit)
+     throw NetworkFailure("Настройка сети VPN не завершилась за отведённое время.");
     if(NetworkReconnecting(folder)){
+     waitingForNetwork??=Stopwatch.GetTimestamp();
      if(connectedStatus is not null){
       activity?.Dispose();activity=null;connectedStatus=null;
       TryState(folder,"reconnecting","Восстанавливаем соединение и сетевые настройки…",workTraffic:peerCounters.Finish());
@@ -260,9 +282,10 @@ internal static class Worker
      continue;
     }
     if(ReadNetwork(folder) is {Stage:"base_ready",Generation:{ } current} && current!=generation) {
+     waitingForNetwork??=Stopwatch.GetTimestamp();
      activity?.Dispose();activity=null;connectedStatus=null;
      TryState(folder,"configuring","Настраиваем маршруты и DNS VPN…");
-     int outcome=Script(folder,"Resolve",current).GetAwaiter().GetResult();
+     int outcome=Script(folder,"Resolve",current);
      if(outcome==NetworkGenerationChanged)continue;
      if(outcome!=0)throw NetworkFailure("Не удалось настроить рабочие адреса. Смотрите network-error.txt.");
      if(!SessionActive()) break;
@@ -279,7 +302,7 @@ internal static class Worker
        var result=request.ApplyToSession(activeConfig,SessionActive,updated=>{
         TryState(folder,"configuring","Обновляем маршруты и DNS рабочих адресов…");
         Storage.Save(Path.Combine(folder,"candidate-config.json"),updated);
-        outcome=Script(folder,"Apply",generation).GetAwaiter().GetResult();
+         outcome=Script(folder,"Apply",generation);
         if(outcome is not (0 or NetworkChangeRejected or NetworkGenerationChanged))
          throw NetworkFailure("Не удалось восстановить сетевые настройки после обновления. Смотрите network-error.txt.");
        },()=>{
@@ -295,7 +318,7 @@ internal static class Worker
      }
      if(deferredDns||dnsRetries.TakeDue(DateTime.UtcNow)){
       bool continuing=deferredDns;
-      int outcome=Script(folder,continuing?"Continue":"Retry",generation).GetAwaiter().GetResult();
+       int outcome=Script(folder,continuing?"Continue":"Retry",generation);
       if(outcome==NetworkGenerationChanged)continue;
       if(outcome is not (0 or NetworkChangeRejected))throw NetworkFailure("Не удалось обновить рабочие адреса. Смотрите network-error.txt.");
       if(!SessionActive())break;
@@ -312,6 +335,7 @@ internal static class Worker
    }
    if(vpn.HasExited && !StopRequested()){
     if(NetworkHookFailed(folder))throw NetworkFailure("Не удалось настроить сеть VPN. Смотрите network-hook-error.txt.");
+     cleanupRequired=generation.Length==0;
     var error=VpnExitError.Describe(vpn.ExitCode,generation.Length>0);failure=error.Message;
     Storage.Save(Path.Combine(folder,"vpn-exit.json"),new{ExitCode=vpn.ExitCode,Phase=generation.Length>0?"tunnel_active":"creating_tunnel",Reason=error.Kind,UpdatedUtc=DateTime.UtcNow});
    }
@@ -326,10 +350,11 @@ internal static class Worker
    var lastTraffic=peerCounters.Finish();
    if(locked) {
     try {
+     if(scriptsReady)File.Delete(NetworkScripts.HookLease(sid,id));
      if((StopRequested()||cleanupRequired) && scriptsReady){
       TryState(folder,"disconnecting","Отключаем VPN и восстанавливаем настройки…",workTraffic:lastTraffic);
-      if(vpn is not null && !vpn.HasExited){GenerateConsoleCtrlEvent(0,0);if(!vpn.WaitForExit(10000)){vpn.Kill();vpn.WaitForExit();}}
-      cleaned=Script(folder,"Cleanup").GetAwaiter().GetResult()==0;
+      if(vpn is not null && !vpn.HasExited){GenerateConsoleCtrlEvent(0,0);if(!vpn.WaitForExit(10000))StopProcess(vpn);}
+      cleaned=Script(folder,"Cleanup")==0;
       if(cleaned)ForgetClient(folder,clientJournal);
       string message=failure.Length>0?failure:"VPN отключён.";
       TryState(folder,cleaned?(cleanupRequired?"error":"disconnected"):"recovery_required",

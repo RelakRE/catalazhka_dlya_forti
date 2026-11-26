@@ -7,6 +7,10 @@
  </PropertyGroup>
  <ItemGroup><Content Include="Network.ps1;network-hook.js" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" /></ItemGroup>
  <ItemGroup>
-  <EmbeddedResource Include="Network.ps1;network-hook.js" LogicalName="%(Filename)%(Extension)" />
+  <EmbeddedResource Include="Network.ps1;network-hook.js;NetworkGuard.cs" LogicalName="%(Filename)%(Extension)" />
+  <Compile Remove="NetworkGuard.cs" />
+ </ItemGroup>
+ <ItemGroup Condition="'$(UpdateSigningPublicKey)' != ''">
+  <AssemblyMetadata Include="FortiSplitUpdatePublicKey" Value="$(UpdateSigningPublicKey)" />
  </ItemGroup>
 </Project>

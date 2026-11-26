@@ -35,12 +35,12 @@ internal static class OfflineUpdateChecks
             current = Path.Combine(previous, "Forti Split.exe");
             File.WriteAllText(current, "previous installation");
             Storage.Save(Path.Combine(previous, ".fortisplit-origin.json"), new UpdateMarker(origin));
-            Storage.Save(link, new UpdateLink(origin, current, Hash(current)));
+            Storage.Save(link, new UpdateLink(origin, current, Hash(current), PublisherVerified: true));
             previousLink = File.ReadAllBytes(link);
         }
 
         // A missing parent models the old process having already exited.
-        Storage.Save(Path.Combine(staging, "ticket.json"), new UpdateTicket(origin, current, Hash(target), int.MaxValue, 0));
+        Storage.Save(Path.Combine(staging, "ticket.json"), new UpdateTicket(origin, current, Hash(target), int.MaxValue, 0, PublisherVerified: true));
         using var ready = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\FortiSplitUpdateReady-" + id);
         Exception? error = null;
         string? restarted = null;

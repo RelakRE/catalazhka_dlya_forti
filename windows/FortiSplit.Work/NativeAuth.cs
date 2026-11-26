@@ -27,6 +27,7 @@ internal static class NativeAuth
  [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] private static extern IntPtr openconnect_get_cookie(IntPtr info);
  [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] private static extern IntPtr openconnect_get_connect_url(IntPtr info);
  [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] private static extern IntPtr openconnect_get_dnsname(IntPtr info);
+ [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] private static extern int openconnect_get_port(IntPtr info);
  [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] private static extern IntPtr openconnect_get_hostname(IntPtr info);
  [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] private static extern IntPtr openconnect_get_version();
  [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] private static extern UIntPtr openconnect_setup_cmd_pipe(IntPtr info);
@@ -45,7 +46,9 @@ internal static class NativeAuth
   Cert cert=(_,_)=>-1;FormCallback form=(_,_)=>1;ProgressCallback progress=(_,_,_,_)=>{};
   IntPtr info=openconnect_vpninfo_new("FortiSplitOfflineCheck",cert,IntPtr.Zero,form,progress,IntPtr.Zero);
   if(info==IntPtr.Zero)return false;
-  try{return openconnect_set_protocol(info,"fortinet")==0&&openconnect_parse_url(info,"https://vpn.example.com")==0;}
+  var endpoint=new Uri("https://vpn.example.com:8443");
+  try{return openconnect_set_protocol(info,"fortinet")==0&&openconnect_parse_url(info,endpoint.AbsoluteUri)==0&&
+   AuthPolicy.SameOrigin(endpoint,Text(openconnect_get_dnsname(info),254),openconnect_get_port(info));}
   finally{openconnect_vpninfo_free(info);GC.KeepAlive(cert);GC.KeepAlive(form);GC.KeepAlive(progress);}
  }
  internal static AuthSession Authenticate(Config config,Func<AuthRequest,AuthReply> ask,Func<bool> cancelled,Action<string,string?>? stage=null,Action<string>? trace=null)
@@ -56,6 +59,12 @@ internal static class NativeAuth
   // Bound only network waits. The user may take as long as needed to enter MFA.
   var responseWait=new AuthResponseWait(Environment.TickCount64);
   var forms=new AuthFormHistory();
+  var expectedOrigin=new Uri(config.Server);
+  IntPtr info=IntPtr.Zero;
+  void VerifyOrigin(){
+   if(!AuthPolicy.SameOrigin(expectedOrigin,Text(openconnect_get_dnsname(info),254),openconnect_get_port(info)))
+    throw new IOException("VPN перенаправил вход на другой сервер.");
+  }
   IOException Stop(AuthFailure failure)
   {
    trace?.Invoke(failure.Kind);
@@ -93,7 +102,8 @@ internal static class NativeAuth
      responseWait.Abort(serverFailure);
      return -1;
     }
-    if(fields.Count==0)return 0;
+     if(fields.Count==0)return 0;
+     VerifyOrigin();
     trace?.Invoke("form_"+AuthPolicy.FormCategory(request));
     if(forms.Next(request,out int attempt) is { } formFailure)throw Stop(formFailure);
     request=request with {Attempt=attempt};
@@ -101,6 +111,7 @@ internal static class NativeAuth
     stage?.Invoke("form_requested",null);
     AuthReply reply=ask(request);
     if(reply.Cancelled||cancelled()||responseWait.Failure is not null)return 1;
+     VerifyOrigin();
     for(int i=0;i<fields.Count;i++){if(!reply.Values.TryGetValue(fields[i].Name,out string? value)||value.Length>4096||value.Contains('\0'))throw new IOException("Неверный ответ формы.");if(openconnect_set_option_value(options[i],value)!=0)throw new IOException("Не удалось заполнить форму.");}
     bool codeSubmitted=AuthPolicy.IsSubmittedCode(request,reply);
     stage?.Invoke(codeSubmitted?"code_submitted":"form_submitted",null);
@@ -108,7 +119,7 @@ internal static class NativeAuth
     return 0;
    }catch(Exception e){callbackFailure=e;return -1;}
   };
-  IntPtr info=openconnect_vpninfo_new("FortiSplit",cert,IntPtr.Zero,formCallback,progress,IntPtr.Zero);
+   info=openconnect_vpninfo_new("FortiSplit",cert,IntPtr.Zero,formCallback,progress,IntPtr.Zero);
   if(info==IntPtr.Zero){WSACleanup();throw new IOException("Не удалось создать клиент входа.");}
   using var lifetime=new CancellationTokenSource();Task? monitor=null;
   try {
@@ -146,7 +157,7 @@ internal static class NativeAuth
    }
    string cookie=Text(openconnect_get_cookie(info),65536),url=Text(openconnect_get_connect_url(info)),dns=Text(openconnect_get_dnsname(info)),address=Text(openconnect_get_hostname(info));
    if(cookie.Length==0||cookie.Contains('\n')||cookie.Contains('\r'))throw new IOException("VPN не выдал сеанс входа.");
-   var endpoint=new Uri(url);if(endpoint.Scheme!="https"||!endpoint.Host.Equals(new Uri(config.Server).Host,StringComparison.OrdinalIgnoreCase))throw new IOException("VPN перенаправил вход на другой сервер.");
+    VerifyOrigin();
    stage?.Invoke("cookie_obtained",null);
    return new(cookie,url,Config.GatewayResolve(dns,address));
   }finally{lifetime.Cancel();monitor?.GetAwaiter().GetResult();openconnect_vpninfo_free(info);WSACleanup();GC.KeepAlive(cert);GC.KeepAlive(progress);GC.KeepAlive(formCallback);}

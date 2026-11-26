@@ -1,4 +1,4 @@
-param([string]$SourceCommit='local')
+param([string]$SourceCommit='local',[ValidatePattern('^[A-Fa-f0-9]{40}$')][string]$UpdateSigningThumbprint)
 $ErrorActionPreference='Stop'
 Set-Location -LiteralPath $PSScriptRoot
 $project='FortiSplit.Work/FortiSplit.Work.csproj'
@@ -11,7 +11,16 @@ $output=Join-Path $PSScriptRoot "build/release/$packageName"
 $assets=Join-Path $PSScriptRoot $assetDirectory
 if(Test-Path -LiteralPath $output){throw 'Release output exists; use a clean checkout.'}
 New-Item -ItemType Directory -Path $assets -Force | Out-Null
-dotnet publish $project -c Release -o $output
+$publishOptions=@()
+if($UpdateSigningThumbprint){
+ $publisherCertificate=Get-Item -LiteralPath "Cert:\CurrentUser\My\$UpdateSigningThumbprint"
+ $rsa=[Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($publisherCertificate)
+ try{
+  if(!$rsa -or $rsa.KeySize -lt 3072 -or $rsa.KeySize -gt 4096){throw 'Updates require a 3072–4096 bit RSA signing key'}
+  $publishOptions+=('-p:UpdateSigningPublicKey='+[Convert]::ToBase64String($rsa.ExportSubjectPublicKeyInfo()))
+ }finally{if($rsa){$rsa.Dispose()}}
+}
+dotnet publish $project -c Release -o $output @publishOptions
 if($LASTEXITCODE -ne 0){throw 'Publish failed'}
 Rename-Item -LiteralPath (Join-Path $output 'FortiSplit.exe') -NewName 'Forti Split.exe'
 Copy-Item profile.example.json,SECURITY.md,THIRD-PARTY.md -Destination $output
@@ -73,6 +82,14 @@ if(@(Get-ChildItem -LiteralPath $output -Force -Recurse | Where-Object { $_.Attr
  throw 'Release package cannot contain links'
 }
 Compress-Archive -Path (Join-Path $output '*') -DestinationPath $archive -CompressionLevel Optimal
+if($UpdateSigningThumbprint){
+ $rsa=[Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($publisherCertificate)
+ try{
+  $digest=[Convert]::FromHexString((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash)
+  $signature=$rsa.SignHash($digest,[Security.Cryptography.HashAlgorithmName]::SHA256,[Security.Cryptography.RSASignaturePadding]::Pss)
+  [IO.File]::WriteAllBytes([IO.Path]::GetFullPath("$archive.sig"),$signature)
+ }finally{$rsa.Dispose()}
+}
 $report=Join-Path $assets 'WINDOWS-VALIDATION.json'
 ./test_work_native.ps1 -Executable $exe -Report $report
 $validation=Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
@@ -84,6 +101,7 @@ $validation | Add-Member -NotePropertyName Runtime -NotePropertyValue 'OpenConne
 $validation | Add-Member -NotePropertyName RuntimeBundled -NotePropertyValue $false
 $validation | Add-Member -NotePropertyName RealVpnAcceptance -NotePropertyValue 'not_run'
 $validation | Add-Member -NotePropertyName Signed -NotePropertyValue $false
+$validation | Add-Member -NotePropertyName UpdateArchiveSigned -NotePropertyValue ([bool]$UpdateSigningThumbprint)
 $validation | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $report -Encoding utf8
 $hashes=Get-ChildItem -LiteralPath $assets -File | Where-Object Name -Ne 'SHA256SUMS.txt' | Sort-Object Name | ForEach-Object {(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()+'  '+$_.Name}
 [IO.File]::WriteAllText((Join-Path $assets 'SHA256SUMS.txt'),($hashes -join "`n")+"`n",[Text.UTF8Encoding]::new($false))

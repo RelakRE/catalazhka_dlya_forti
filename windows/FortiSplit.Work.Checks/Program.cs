@@ -1,6 +1,7 @@
 using FortiSplit.Work;
 using System.Diagnostics;
 using System.Net;
+using System.Security.Cryptography;
 using System.Text.Json;
 var results=new Dictionary<string,bool>();
 void Check(string name,bool condition)=>results.Add(name,condition);
@@ -27,6 +28,9 @@ Check("ipv6_gateway_keeps_authenticated_peer",Config.GatewayResolve("vpn.example
 Check("ipv4_gateway_keeps_authenticated_peer",Config.GatewayResolve("vpn.example.com","192.0.2.6")=="vpn.example.com:192.0.2.6");
 Reject("invalid_gateway_peer_rejected",()=>Config.GatewayResolve("vpn.example.com","bad-peer"));
 foreach(string url in new[]{"http://vpn.example","https://a:b@vpn.example","https://vpn.example/?secret=1","https://vpn.example/#x"})Reject("server_"+url,()=>new Config{Server=url,AutoRdp=false}.Validate());
+var loginOrigin=new Uri("https://vpn.example.com:8443/");
+Check("auth_origin_requires_the_expected_hostname_and_port",AuthPolicy.SameOrigin(loginOrigin,"VPN.example.com",8443)&&
+ !AuthPolicy.SameOrigin(loginOrigin,"redirect.example.com",8443)&&!AuthPolicy.SameOrigin(loginOrigin,"vpn.example.com",443));
 Check("ready_only_launch",LaunchGate.CanLaunch(new("connected","ok",true),true));
 Check("no_launch_during_auth",!LaunchGate.CanLaunch(new("authenticating","wait",true),true));
 Check("no_stale_launch",!LaunchGate.CanLaunch(new("connected","ok",true),false));
@@ -89,7 +93,8 @@ const string releaseCatalog="""
 var update=UpdateCatalog.FindNewer(releaseCatalog,UpdateCatalog.CurrentVersion("1.2.6-ui-preview+abc"));
 Check("updates_choose_newest_published_windows_preview",update?.Version==new Version(1,2,8));
 Check("update_page_is_constructed_from_trusted_repository",update?.PageUrl=="https://github.com/RelakRE/catalazhka_dlya_forti/releases/tag/windows-v1.2.8");
-Check("update_requires_github_digest_and_size",update?.CanInstall==true&&new UpdateCandidate(new Version(1,2,8),"",44,"",4).CanInstall==false);
+Check("update_requires_github_digest_and_size",update?.HasVerifiableArchive==true&&new UpdateCandidate(new Version(1,2,8),"",44,"",4).HasVerifiableArchive==false);
+Check("unsigned_release_is_manual_only",update is {HasPublisherSignature:false}&&!UpdateDownload.CanInstall(update));
 Check("same_version_has_no_update",UpdateCatalog.FindNewer(releaseCatalog,new Version(1,2,8)) is null);
 Check("no_releases_has_no_update",UpdateCatalog.FindNewer("[]",new Version(1,2,6)) is null);
 Reject("malformed_release_catalog_rejected",()=>UpdateCatalog.FindNewer("{}",new Version(1,2,6)));
@@ -106,11 +111,19 @@ try{await UpdateCheck.FindNewer("1.2.6",CancellationToken.None,tooLarge,TimeSpan
 string? realCatalog=Environment.GetEnvironmentVariable("FORTISPLIT_TEST_PUBLIC_RELEASES");
 if(!string.IsNullOrEmpty(realCatalog)){
  var real=UpdateCatalog.FindNewer(File.ReadAllText(realCatalog),new Version(1,2,5));
- Check("actual_github_releases_include_windows_126_or_newer",real is not null&&real.Version>=new Version(1,2,6)&&real.CanInstall);
+ Check("actual_github_releases_include_windows_126_or_newer",real is not null&&real.Version>=new Version(1,2,6)&&real.HasVerifiableArchive);
 }
 string updateTemp=Path.Combine(Path.GetTempPath(),"FortiSplitUpdateChecks-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(updateTemp);
 try{
  byte[] payload=[1,2,3,4];string digest=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(payload)).ToLowerInvariant();
+ using(var publisher=RSA.Create(3072)){
+  string publicKey=Convert.ToBase64String(publisher.ExportSubjectPublicKeyInfo());
+  byte[] signature=publisher.SignData(payload,HashAlgorithmName.SHA256,RSASignaturePadding.Pss);
+  Check("update_accepts_publisher_signature",UpdateDownload.VerifyPublisher(publicKey,digest,signature));
+  Check("update_rejects_signature_over_other_content",!UpdateDownload.VerifyPublisher(publicKey,new string('0',64),signature));
+  signature[0]^=1;
+  Check("update_rejects_tampered_signature",!UpdateDownload.VerifyPublisher(publicKey,digest,signature));
+ }
  var candidate=new UpdateCandidate(new Version(1,2,8),"",44,digest,payload.Length);
  var downloadHandler=new FakeUpdateHandler((_,_)=>Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK){Content=new ByteArrayContent(payload)}));
  string download=Path.Combine(updateTemp,"download.zip");await UpdateDownload.Download(candidate,download,CancellationToken.None,downloadHandler);

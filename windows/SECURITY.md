@@ -14,6 +14,9 @@
   Console output is drained without logging. Native library progress text is discarded;
   only validated numeric HTTP status codes and fixed authentication events are retained.
 - TLS validation failures are rejected. The app provides no trust-bypass checkbox.
+- The app checks the VPN hostname and port before showing or submitting every
+  authentication form. Automatic updates require a publisher signature that
+  matches the public key embedded in the installed build.
 - The Work tab uses the IPv4 addresses and packet lengths observed on the VPN
   interface to count traffic to configured work IPs. Packet contents are discarded.
   The private session status contains the currently active work IPs, their names,
@@ -23,8 +26,10 @@
   attempted only for VPN routes, with the VPN source address. Normal Disconnect/Exit
   removes session changes. After an unexpected failure, use Restore Network; until
   then, recorded routes/DNS settings and a remaining VPN process can persist.
-  Manual recovery checks the recorded PID, creation time and executable path before
-  stopping that process and removes only network settings owned by this app.
+  Manual recovery uses only the protected journals. It checks the recorded PID,
+  creation time and executable path before stopping that process.
+- During reconnect, packet filters block traffic to known work IPv4 and VPN DNS
+  servers on other interfaces. The protected journal tracks the filters for cleanup.
 - Profiles and session reports in LocalAppData contain private names, IPs and local paths.
   Keep these and the protected recovery journal out of Git. A private export is not encrypted.
 - Live work-address updates use a bounded hostname/IPv4 and DNS-domain request under

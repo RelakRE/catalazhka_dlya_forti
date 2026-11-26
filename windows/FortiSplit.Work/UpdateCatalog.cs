@@ -3,9 +3,9 @@ using System.Text.RegularExpressions;
 
 namespace FortiSplit.Work;
 
-public sealed record UpdateCandidate(Version Version, string PageUrl, long AssetId = 0, string Sha256 = "", long Size = 0)
+public sealed record UpdateCandidate(Version Version, string PageUrl, long AssetId = 0, string Sha256 = "", long Size = 0, bool HasPublisherSignature = false)
 {
- public bool CanInstall => AssetId>0 && Size>0 && Size<=200L*1024*1024 && Regex.IsMatch(Sha256,@"^[a-f0-9]{64}$",RegexOptions.CultureInvariant);
+ public bool HasVerifiableArchive => AssetId>0 && Size>0 && Size<=200L*1024*1024 && Regex.IsMatch(Sha256,@"^[a-f0-9]{64}$",RegexOptions.CultureInvariant);
 }
 
 public static class UpdateCatalog
@@ -33,16 +33,20 @@ public static class UpdateCatalog
    string tag=tagElement.GetString()??"";var match=Tag.Match(tag);
    if(!match.Success||!Version.TryParse(tag[9..],out var version)||version<=current||(best is not null&&version<=best.Version))continue;
    string assetName=$"Forti-Split-{version.Major}.{version.Minor}.{version.Build}-Windows-x64.zip";
+   bool hasSignature=assets.EnumerateArray().Any(asset=>IsUploaded(asset,assetName+".sig"));
    foreach(var asset in assets.EnumerateArray()){
-    if(asset.ValueKind!=JsonValueKind.Object||!asset.TryGetProperty("name",out var name)||name.ValueKind!=JsonValueKind.String||name.GetString()!=assetName||
-       !asset.TryGetProperty("state",out var state)||state.ValueKind!=JsonValueKind.String||state.GetString()!="uploaded")continue;
+    if(!IsUploaded(asset,assetName))continue;
     long id=asset.TryGetProperty("id",out var idValue)&&idValue.ValueKind==JsonValueKind.Number&&idValue.TryGetInt64(out long parsedId)?parsedId:0;
     long size=asset.TryGetProperty("size",out var sizeValue)&&sizeValue.ValueKind==JsonValueKind.Number&&sizeValue.TryGetInt64(out long parsedSize)?parsedSize:0;
     string digest=asset.TryGetProperty("digest",out var digestValue)&&digestValue.ValueKind==JsonValueKind.String?digestValue.GetString()??"":"";
     string hash=digest.StartsWith("sha256:",StringComparison.Ordinal)?digest[7..]:"";
-    best=new(version,PageBase+tag,id,hash,size);break;
+    best=new(version,PageBase+tag,id,hash,size,hasSignature);break;
    }
   }
   return best;
  }
+
+ private static bool IsUploaded(JsonElement asset,string name)=>asset.ValueKind==JsonValueKind.Object&&
+  asset.TryGetProperty("name",out var assetName)&&assetName.ValueKind==JsonValueKind.String&&assetName.GetString()==name&&
+  asset.TryGetProperty("state",out var state)&&state.ValueKind==JsonValueKind.String&&state.GetString()=="uploaded";
 }

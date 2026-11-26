@@ -94,6 +94,11 @@ public sealed class AuthResponseWait
 
 public static class AuthPolicy
 {
+ // OpenConnect only follows HTTPS redirects and exposes the current DNS name and port separately.
+ internal static bool SameOrigin(Uri expected,string dnsName,int port) =>
+  expected.Scheme==Uri.UriSchemeHttps&&expected.Port==port&&
+  string.Equals(expected.IdnHost,dnsName,StringComparison.OrdinalIgnoreCase);
+
  internal const string RetryLater="Подождите около двух минут перед новой попыткой.";
 
  // OpenConnect 9.21 http.c. Inspect the fixed printf format only.

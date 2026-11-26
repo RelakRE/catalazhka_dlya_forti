@@ -5,8 +5,8 @@ using System.Text;
 namespace FortiSplit.Work;
 
 internal sealed record UpdateMarker(string OriginExe);
-internal sealed record UpdateLink(string OriginExe,string TargetExe,string TargetSha256,bool Pending=false,UpdateLink? Previous=null);
-internal sealed record UpdateTicket(string OriginExe,string CurrentExe,string TargetSha256,int ParentId,long ParentTicks);
+internal sealed record UpdateLink(string OriginExe,string TargetExe,string TargetSha256,bool Pending=false,UpdateLink? Previous=null,bool PublisherVerified=false);
+internal sealed record UpdateTicket(string OriginExe,string CurrentExe,string TargetSha256,int ParentId,long ParentTicks,bool PublisherVerified=false);
 
 internal static class UpdateInstall
 {
@@ -40,8 +40,9 @@ internal static class UpdateInstall
    string current=Environment.ProcessPath??throw new IOException();string origin=Origin(current);string path=LinkPath(origin);
    if(!File.Exists(path))return null;
    var link=Storage.Read<UpdateLink>(path);
+   if(!link.PublisherVerified)return null;
    if(link.Pending&&!allowPending){
-    if(link.Previous is null){File.Delete(path);return Equal(current,origin)||!File.Exists(origin)?null:origin;}
+    if(link.Previous is not {PublisherVerified:true}){File.Delete(path);return Equal(current,origin)||!File.Exists(origin)?null:origin;}
     Storage.Save(path,link.Previous);link=link.Previous;
    }
    if(!Equal(link.OriginExe,origin)||!Within(link.TargetExe,Versions)||Path.GetFileName(link.TargetExe)!="Forti Split.exe")return null;
@@ -73,7 +74,7 @@ internal static class UpdateInstall
    if(!locked)return false;
    string current=Environment.ProcessPath??throw new IOException();string origin=Origin(current);
    var link=Storage.Read<UpdateLink>(LinkPath(origin));
-   return !link.Pending&&Equal(link.OriginExe,origin)&&Equal(link.TargetExe,current);
+    return link.PublisherVerified&&!link.Pending&&Equal(link.OriginExe,origin)&&Equal(link.TargetExe,current);
   }catch(Exception){return false;}finally{if(locked)gate.ReleaseMutex();}
  });
 
@@ -110,10 +111,14 @@ internal static class UpdateInstall
   string temporary=Path.Combine(Staging,id),version=Path.Combine(Versions,id);Storage.Protect(temporary);
   bool launched=false;
   try{
+   await UpdateDownload.VerifyRelease(release,cancellation);
    string archive=Path.Combine(temporary,"release.zip");await UpdateDownload.Download(release,archive,cancellation);
    cancellation.ThrowIfCancellationRequested();
    await Task.Run(()=>{
-    UpdateArchive.Extract(archive,version);Storage.Protect(version);
+     UpdateArchive.Extract(archive,version);Storage.Protect(version);
+     string executable=Path.Combine(version,"Forti Split.exe");
+     if(UpdateCatalog.CurrentVersion(FileVersionInfo.GetVersionInfo(executable).ProductVersion??"")!=release.Version)
+      throw new IOException("Версия подписанного приложения не совпадает с выпуском.");
     string client=Path.Combine(Path.GetDirectoryName(current)!,"client");Storage.RegularPath(client);
     UpdateRuntime.Copy(client,Path.Combine(version,"client"));
     Storage.Save(Path.Combine(version,".fortisplit-origin.json"),new UpdateMarker(origin));
@@ -122,7 +127,7 @@ internal static class UpdateInstall
    string target=Path.Combine(version,"Forti Split.exe");Storage.RegularPath(target);
    using var parent=Process.GetCurrentProcess();
    string targetHash=await Task.Run(()=>Hash(target),cancellation);
-   Storage.Save(Path.Combine(temporary,"ticket.json"),new UpdateTicket(origin,current,targetHash,parent.Id,parent.StartTime.ToUniversalTime().Ticks));
+   Storage.Save(Path.Combine(temporary,"ticket.json"),new UpdateTicket(origin,current,targetHash,parent.Id,parent.StartTime.ToUniversalTime().Ticks,PublisherVerified:true));
    File.Delete(archive);string helper=Path.Combine(temporary,"updater.exe");await Task.Run(()=>File.Copy(current,helper),cancellation);
    using var ready=new EventWaitHandle(false,EventResetMode.AutoReset,@"Local\FortiSplitUpdateReady-"+id);
    var info=new ProcessStartInfo(helper){UseShellExecute=false,CreateNoWindow=true};info.ArgumentList.Add("--complete-update");info.ArgumentList.Add(id);
@@ -150,12 +155,12 @@ internal static class UpdateInstall
    if(!locked)throw new IOException("Уже выполняется обновление.");
    ticket=Storage.Read<UpdateTicket>(Path.Combine(temporary,"ticket.json"));
    string target=Path.Combine(version,"Forti Split.exe");Storage.RegularPath(target);
-   if(!File.Exists(target)||!string.Equals(Hash(target),ticket.TargetSha256,StringComparison.OrdinalIgnoreCase)||!Equal(Origin(ticket.CurrentExe,versions),ticket.OriginExe)||!Equal(Origin(target,versions),ticket.OriginExe))throw new IOException("Не удалось проверить подготовленное обновление.");
+   if(!ticket.PublisherVerified||!File.Exists(target)||!string.Equals(Hash(target),ticket.TargetSha256,StringComparison.OrdinalIgnoreCase)||!Equal(Origin(ticket.CurrentExe,versions),ticket.OriginExe)||!Equal(Origin(target,versions),ticket.OriginExe))throw new IOException("Не удалось проверить подготовленное обновление.");
    using(var ready=EventWaitHandle.OpenExisting(@"Local\FortiSplitUpdateReady-"+id))ready.Set();
    try{using var parent=Process.GetProcessById(ticket.ParentId);if(!parent.HasExited&&(parent.StartTime.ToUniversalTime().Ticks!=ticket.ParentTicks||!Equal(parent.MainModule?.FileName??"",ticket.CurrentExe)||!parent.WaitForExit(30000)))throw new IOException("Приложение не завершилось.");}catch(ArgumentException){}parentExited=true;
    string path=LinkPath(ticket.OriginExe,Path.Combine(updates,"links"));UpdateLink? previous=File.Exists(path)?Storage.Read<UpdateLink>(path):null;
    if(previous?.Pending==true)throw new IOException("Предыдущее обновление не завершено.");
-   Storage.Save(path,new UpdateLink(ticket.OriginExe,target,ticket.TargetSha256,true,previous));
+   Storage.Save(path,new UpdateLink(ticket.OriginExe,target,ticket.TargetSha256,true,previous,PublisherVerified:true));
    Process? next=null;
    try{
     using var started=new EventWaitHandle(false,EventResetMode.AutoReset,@"Local\FortiSplitUpdateStarted-"+id);
@@ -166,7 +171,7 @@ internal static class UpdateInstall
      if(next.HasExited)throw new IOException("Новая версия завершилась до запуска.");
      if(Stopwatch.GetElapsedTime(start).TotalSeconds>=30)throw new IOException("Новая версия не открылась.");
     }
-    Storage.Save(path,new UpdateLink(ticket.OriginExe,target,ticket.TargetSha256));
+    Storage.Save(path,new UpdateLink(ticket.OriginExe,target,ticket.TargetSha256,PublisherVerified:true));
    }catch{try{if(next is not null&&!next.HasExited){next.Kill();next.WaitForExit();}}catch(Exception){}if(previous is null)File.Delete(path);else Storage.Save(path,previous);throw;}finally{next?.Dispose();}
    gate.ReleaseMutex();locked=false;
    return 0;

@@ -143,10 +143,11 @@ internal static class OfflineChecks
     checks["embedded_"+name]=embedded is not null && SHA256.HashData(embedded).SequenceEqual(SHA256.HashData(file));
    }
    string image=Path.Combine(recoveryTest,"openconnect.exe");
-   Storage.Save(Path.Combine(recoveryTest,"vpn-process.json"),new{Id=Environment.ProcessId,StartTicks=0L,Image=image});
-   try{Worker.StopSavedClient(recoveryTest);checks["manual_recovery_refuses_own_process"]=false;}catch(IOException){checks["manual_recovery_refuses_own_process"]=true;}
-   Storage.Save(Path.Combine(recoveryTest,"vpn-process.json"),new{Id=int.MaxValue,StartTicks=0L,Image=image});
-   Worker.StopSavedClient(recoveryTest);checks["manual_recovery_handles_missing_process"]=true;
+   string savedProcess=Path.Combine(recoveryTest,"vpn-process.json");
+   Storage.Save(savedProcess,new{Id=Environment.ProcessId,StartTicks=0L,Image=image});
+   try{Worker.StopSavedClient(savedProcess);checks["manual_recovery_refuses_own_process"]=false;}catch(IOException){checks["manual_recovery_refuses_own_process"]=true;}
+   Storage.Save(savedProcess,new{Id=int.MaxValue,StartTicks=0L,Image=image});
+   Worker.StopSavedClient(savedProcess);checks["manual_recovery_handles_missing_process"]=true;
    string journal=Path.Combine(recoveryTest,"journals");
    Directory.CreateDirectory(journal);
    string orphanId=Guid.NewGuid().ToString("N"),sid=identity.User!.Value;
@@ -156,7 +157,7 @@ internal static class OfflineChecks
    File.WriteAllText(Path.Combine(journal,otherSid.Value+"-"+Guid.NewGuid().ToString("N")+".json"),"{}");
    checks["recovery_discovers_protected_orphan_for_current_user"]=NetworkScripts.PendingSessions(journal,sid)
     .Distinct().SequenceEqual(new[]{orphanId}) && !Directory.Exists(Path.Combine(recoveryTest,orphanId));
-   try{Worker.StopSavedClient(Path.Combine(recoveryTest,orphanId),processJournal);checks["orphan_recovery_reads_protected_process_identity"]=false;}
+   try{Worker.StopSavedClient(processJournal);checks["orphan_recovery_reads_protected_process_identity"]=false;}
    catch(IOException){checks["orphan_recovery_reads_protected_process_identity"]=true;}
   }catch(Exception error){RecordFailure("manual_recovery_handles_missing_process","verify_recovery",error);}
   finally{try{Directory.Delete(recoveryTest,true);}catch{}}

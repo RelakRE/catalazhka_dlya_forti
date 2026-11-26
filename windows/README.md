@@ -36,15 +36,16 @@ Windows releases, including previews, with the expected Windows x64 ZIP. In Sett
 **Открыть выпуск** opens the project release page. An unavailable network does not
 block VPN use. The check sends no VPN profile, credentials or authentication codes.
 
-When an update is available, **Обновить** downloads and checks the release after the
-user disconnects the VPN. The app verifies the GitHub asset's size and SHA-256,
-validates the archive and installs into a separate LocalAppData folder. Existing VPN
+When a signed update is available, **Обновить** downloads and checks the release after
+the user disconnects the VPN. The app verifies the archive's publisher signature
+against the public key embedded in the installed build, checks size and SHA-256,
+and installs into a separate LocalAppData folder. Existing VPN
 runtime files and settings are retained. The app switches to the new version only
 after preparation and restarts it; the previous installation remains available if
 the switch fails. **Открыть выпуск** remains available for manual installation.
-Only packages with `fortisplit-update-v1.json` support the automatic restart protocol;
-older releases need manual installation. A GitHub checksum detects corruption but is
-not an independent publisher signature. Current preview releases are unsigned.
+Automatic installation requires the restart marker, a matching `.zip.sig` asset,
+and an installed build with the publisher's public key. Builds without a key and
+releases without a signature use **Открыть выпуск** for manual installation.
 
 ## Build from source
 
@@ -64,6 +65,10 @@ performs only that preparation for automation, without connecting VPN.
 copy an existing compatible local runtime. The native API binding supports the
 OpenConnect 9.12 public ABI and is checked offline with 9.21 for this release.
 Run `./build-release.ps1` in a clean checkout to create and validate release assets.
+To sign update archives, run the same script in PowerShell 7 with
+`-UpdateSigningThumbprint` set to the thumbprint of the publisher's 3072–4096-bit
+RSA certificate in `Cert:\CurrentUser\My`. The build embeds its public key and
+emits an RSA-PSS/SHA-256 `.zip.sig` asset. Keep the signing key outside the repository.
 
 ## Profiles
 
@@ -101,6 +106,10 @@ keeps that name's previous routes; deleting the name explicitly removes routes
 no longer needed elsewhere. The app checks the 256-route limit before changing the
 table. If an update fails, it attempts to restore the previous routes and DNS rules.
 Disconnect/recovery removes all session-owned changes.
+Windows Filtering Platform blocks the session's known work IPv4 and VPN DNS
+destinations on other interfaces, including while reconnecting. The app keeps the
+previous DNS rules during the transition. Earlier work addresses stay protected
+until the next explicit change of work addresses, disconnect, or recovery.
 There is no continuous DNS polling or TTL-based refresh; applying addresses or
 reconnecting performs a fresh lookup. Use actual internal values in private
 profiles; public examples remain blank.
@@ -125,8 +134,8 @@ directory is missing. It stops only the recorded VPN process and removes the
 app's own settings.
 Existing profiles and private credentials are reused.
 New sessions record the adapter GUID in a protected journal, so recovery follows
-a renamed tunnel. When recovering a session created by an older build, restore
-the adapter name `FortiSplitWork` first if it has been renamed.
+a renamed tunnel. A legacy session with only a user-writable journal copy needs
+administrator-assisted recovery.
 
 For a fresh installation, set the server under Settings → **VPN**, then select the
 RDP file and configure TrueConf as needed under **Приложения**. Profiles, network
