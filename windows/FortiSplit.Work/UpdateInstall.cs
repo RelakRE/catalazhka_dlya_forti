@@ -8,7 +8,7 @@ using Microsoft.Win32.SafeHandles;
 namespace FortiSplit.Work;
 
 internal sealed record UpdateMarker(string OriginExe);
-internal sealed record UpdateLink(string OriginExe,string TargetExe,bool Pending=false,UpdateLink? Previous=null);
+internal sealed record UpdateLink(string OriginExe,string TargetExe,bool Pending=false,UpdateLink? Previous=null,string? TargetSha256=null);
 internal sealed record UpdateTicket(string OriginExe,string CurrentExe,int ParentId,long ParentTicks);
 
 internal static class UpdateInstall
@@ -49,12 +49,36 @@ internal static class UpdateInstall
  internal sealed class VerifiedExecutable(string path,FileStream image,List<SafeFileHandle> directories):IDisposable
  {
   internal string Path {get;}=path;
+  internal UpdateLink CreateLink(string origin)
+  {
+   // The original 1.2.7 shortcut still checks this field on every launch.
+   image.Position=0;
+   return new(origin,Path,TargetSha256:Convert.ToHexString(SHA256.HashData(image)));
+  }
 
   public void Dispose()
   {
    image.Dispose();
    foreach(var directory in directories)directory.Dispose();
   }
+ }
+
+ private static void VerifyProof(Stream content,string attestationPath,string signaturePath,string? publisherKey)
+ {
+  if(File.Exists(attestationPath)){
+   Storage.RegularPath(attestationPath);
+   byte[] proof=UpdateAttestation.Read(attestationPath);
+   Task.Run(()=>UpdateAttestation.Verify(content,proof,CancellationToken.None)).GetAwaiter().GetResult();
+   return;
+  }
+  if(string.IsNullOrEmpty(publisherKey)||!File.Exists(signaturePath))
+   throw new IOException("Подтверждение обновления отсутствует. Распакуйте ZIP выпуска в отдельную папку и запустите «Forti Split.exe» оттуда.");
+  Storage.RegularPath(signaturePath);
+  using var signature=File.OpenRead(signaturePath);
+  if(signature.Length is <384 or >512)throw new IOException("Неверный размер подписи обновления.");
+  byte[] signatureBytes=new byte[(int)signature.Length];signature.ReadExactly(signatureBytes);
+  if(!UpdateDownload.VerifyPublisher(publisherKey,Convert.ToHexString(SHA256.HashData(content)),signatureBytes))
+   throw new IOException("Подпись издателя обновления не прошла проверку.");
  }
 
  internal static VerifiedExecutable OpenVerifiedExecutable(string path,string? publisherKey)
@@ -74,35 +98,25 @@ internal static class UpdateInstall
     if(handle.IsInvalid)throw new Win32Exception(Marshal.GetLastWin32Error());
     Storage.RegularPath(parent);
    }
-   string archivePath=Path.Combine(directory,ProofArchive),attestationPath=Path.Combine(directory,ProofAttestation);
-   bool hasAttestation=File.Exists(attestationPath);
-   if(!hasAttestation&&string.IsNullOrEmpty(publisherKey))
-    throw new IOException("Подтверждение обновления отсутствует. Распакуйте ZIP выпуска в отдельную папку и запустите «Forti Split.exe» оттуда.");
-   Storage.RegularPath(archivePath);
-   using var archive=File.OpenRead(archivePath);
-   if(archive.Length is <=0 or >200L*1024*1024)
-    throw new IOException("Неверный размер данных проверки обновления.");
-   if(hasAttestation){
-    Storage.RegularPath(attestationPath);
-    byte[] proof=UpdateAttestation.Read(attestationPath);
-    Task.Run(()=>UpdateAttestation.Verify(archive,proof,CancellationToken.None)).GetAwaiter().GetResult();
-   }else{
-    string signaturePath=Path.Combine(directory,ProofSignature);
-    Storage.RegularPath(signaturePath);
-    using var signature=File.OpenRead(signaturePath);
-    if(signature.Length is <384 or >512)throw new IOException("Неверный размер подписи обновления.");
-    byte[] signatureBytes=new byte[(int)signature.Length];signature.ReadExactly(signatureBytes);
-    if(!UpdateDownload.VerifyPublisher(publisherKey!,Convert.ToHexString(SHA256.HashData(archive)),signatureBytes))
-     throw new IOException("Подпись издателя обновления не прошла проверку.");
-   }
-   archive.Position=0;
    var image=OpenPath(path,readAccess,FileShare.Read,IntPtr.Zero,FileMode.Open,openReparsePoint,IntPtr.Zero);
    try{
     if(image.IsInvalid)throw new Win32Exception(Marshal.GetLastWin32Error());
     Storage.RegularPath(path);
     executable=new FileStream(image,FileAccess.Read);
    }catch{image.Dispose();throw;}
-   if(!UpdateArchive.MatchesExecutable(archive,executable))throw new IOException("Файл приложения отличается от подписанного выпуска.");
+   string archivePath=Path.Combine(directory,ProofArchive);
+   if(File.Exists(archivePath)){
+    Storage.RegularPath(archivePath);
+    using var archive=File.OpenRead(archivePath);
+    if(archive.Length is <=0 or >200L*1024*1024)throw new IOException("Неверный размер данных проверки обновления.");
+    VerifyProof(archive,Path.Combine(directory,ProofAttestation),Path.Combine(directory,ProofSignature),publisherKey);
+    archive.Position=0;
+    if(!UpdateArchive.MatchesExecutable(archive,executable))throw new IOException("Файл приложения отличается от подписанного выпуска.");
+   }else{
+    // Legacy installers discard the ZIP. Their format allows extra files under licenses/.
+    string proof=Path.Combine(directory,"licenses","FortiSplit.exe");
+    VerifyProof(executable,proof+UpdateCatalog.AttestationSuffix,proof+".sig",publisherKey);
+   }
    return new(path,executable,lockedDirectories);
   }catch{
    executable?.Dispose();
@@ -261,7 +275,8 @@ internal static class UpdateInstall
    try{using var parent=Process.GetProcessById(ticket.ParentId);if(!parent.HasExited&&(parent.StartTime.ToUniversalTime().Ticks!=ticket.ParentTicks||!Equal(parent.MainModule?.FileName??"",ticket.CurrentExe)||!parent.WaitForExit(30000)))throw new IOException("Приложение не завершилось.");}catch(ArgumentException){}parentExited=true;
    string path=LinkPath(ticket.OriginExe,Path.Combine(updates,"links"));UpdateLink? previous=File.Exists(path)?Storage.Read<UpdateLink>(path):null;
    if(previous?.Pending==true)throw new IOException("Предыдущее обновление не завершено.");
-   Storage.Save(path,new UpdateLink(ticket.OriginExe,target,true,previous));
+   var committed=executable.CreateLink(ticket.OriginExe);
+   Storage.Save(path,committed with {Pending=true,Previous=previous});
    Process? next=null;
    try{
     using var started=new EventWaitHandle(false,EventResetMode.AutoReset,@"Local\FortiSplitUpdateStarted-"+id);
@@ -272,7 +287,7 @@ internal static class UpdateInstall
      if(next.HasExited)throw new IOException("Новая версия завершилась до запуска.");
      if(Stopwatch.GetElapsedTime(start).TotalSeconds>=30)throw new IOException("Новая версия не открылась.");
     }
-    Storage.Save(path,new UpdateLink(ticket.OriginExe,target));
+    Storage.Save(path,committed);
    }catch{try{if(next is not null&&!next.HasExited){next.Kill();next.WaitForExit();}}catch(Exception){}if(previous is null)File.Delete(path);else Storage.Save(path,previous);throw;}finally{next?.Dispose();}
    gate.ReleaseMutex();locked=false;
    return 0;

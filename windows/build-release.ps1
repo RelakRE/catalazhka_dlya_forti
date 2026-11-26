@@ -1,4 +1,7 @@
-param([string]$SourceCommit='local',[ValidatePattern('^[A-Fa-f0-9]{40}$')][string]$UpdateSigningThumbprint)
+[CmdletBinding(DefaultParameterSetName='Publish')]
+param([string]$SourceCommit='local',
+ [Parameter(ParameterSetName='Publish')][ValidatePattern('^[A-Fa-f0-9]{40}$')][string]$UpdateSigningThumbprint,
+ [Parameter(Mandatory,ParameterSetName='Attested')][string]$AttestedPublishDirectory)
 $ErrorActionPreference='Stop'
 Set-Location -LiteralPath $PSScriptRoot
 $project='FortiSplit.Work/FortiSplit.Work.csproj'
@@ -20,8 +23,15 @@ if($UpdateSigningThumbprint){
   $publishOptions+=('-p:UpdateSigningPublicKey='+[Convert]::ToBase64String($rsa.ExportSubjectPublicKeyInfo()))
  }finally{if($rsa){$rsa.Dispose()}}
 }
-dotnet publish $project -c Release -o $output @publishOptions
-if($LASTEXITCODE -ne 0){throw 'Publish failed'}
+if($AttestedPublishDirectory){
+ New-Item -ItemType Directory -Path $output | Out-Null
+ foreach($name in @('FortiSplit.exe','network-hook.js','Network.ps1')){
+  Copy-Item -LiteralPath (Join-Path $AttestedPublishDirectory $name) -Destination $output
+ }
+}else{
+ dotnet publish $project -c Release -o $output @publishOptions
+ if($LASTEXITCODE -ne 0){throw 'Publish failed'}
+}
 Rename-Item -LiteralPath (Join-Path $output 'FortiSplit.exe') -NewName 'Forti Split.exe'
 Copy-Item profile.example.json,SECURITY.md,THIRD-PARTY.md -Destination $output
 [IO.File]::WriteAllText((Join-Path $output 'fortisplit-update-v1.json'),'{"format":1,"ready_signal":true}',[Text.UTF8Encoding]::new($false))
@@ -80,6 +90,15 @@ foreach($pack in @('microsoft.netcore.app.runtime.win-x64','microsoft.windowsdes
 }
 if(@(Get-ChildItem -LiteralPath $licenses -Recurse -File).Count -lt 2){throw 'Missing .NET licenses'}
 $exe=Join-Path $output 'Forti Split.exe'
+if($AttestedPublishDirectory){
+ Copy-Item -LiteralPath (Join-Path $AttestedPublishDirectory 'FortiSplit.exe.sigstore.json') -Destination $licenses
+}elseif($UpdateSigningThumbprint){
+ $rsa=[Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($publisherCertificate)
+ try{
+  $digest=[Convert]::FromHexString((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash)
+  [IO.File]::WriteAllBytes((Join-Path $licenses 'FortiSplit.exe.sig'),$rsa.SignHash($digest,[Security.Cryptography.HashAlgorithmName]::SHA256,[Security.Cryptography.RSASignaturePadding]::Pss))
+ }finally{$rsa.Dispose()}
+}
 $builtVersion=(Get-Item -LiteralPath $exe).VersionInfo.ProductVersion
 if(($builtVersion -split '\+',2)[0] -cne $projectVersion){throw 'Release version mismatch'}
 $archive=Join-Path $assets "$packageName.zip"

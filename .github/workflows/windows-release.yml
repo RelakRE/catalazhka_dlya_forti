@@ -29,9 +29,20 @@ jobs:
           dotnet-version: '10.0.x'
       - name: Verify source, network simulation and native network schema
         run: ./test-work.ps1 -SourceOnly
+      - name: Publish the Windows executable
+        run: dotnet publish FortiSplit.Work/FortiSplit.Work.csproj -c Release -o build/attested
+      - name: Attest the executable for older updaters
+        id: attest_exe
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: windows/build/attested/FortiSplit.exe
       - name: Build archive and verify first-run preparation and native offline tests
         id: package
-        run: ./build-release.ps1 -SourceCommit $env:GITHUB_SHA
+        env:
+          EXE_BUNDLE: ${{ steps.attest_exe.outputs.bundle-path }}
+        run: |
+          Copy-Item -LiteralPath $env:EXE_BUNDLE -Destination build/attested/FortiSplit.exe.sigstore.json
+          ./build-release.ps1 -SourceCommit $env:GITHUB_SHA -AttestedPublishDirectory build/attested
       - name: Attest the Windows archive
         id: attest
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
@@ -55,6 +66,16 @@ jobs:
           } finally { $test.Dispose() }
           $hash = (Get-FileHash -LiteralPath $proof -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $([IO.Path]::GetFileName($proof))" | Add-Content -LiteralPath "$env:RELEASE_ASSETS/SHA256SUMS.txt" -Encoding utf8
+      - name: Verify migration with the released 1.2.7 updater
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.package.outputs.version }}
+          RELEASE_ASSETS: ${{ steps.package.outputs.assets }}
+        run: |
+          $old = 'Forti-Split-1.2.7-Windows-x64.zip'
+          gh release download windows-v1.2.7 --repo $env:GITHUB_REPOSITORY --pattern $old --dir $env:RUNNER_TEMP
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./test_legacy_update.ps1 -LegacyArchive (Join-Path $env:RUNNER_TEMP $old) -Archive "$env:RELEASE_ASSETS/Forti-Split-$env:RELEASE_VERSION-Windows-x64.zip"
       - name: Publish Windows preview
         env:
           GH_TOKEN: ${{ github.token }}

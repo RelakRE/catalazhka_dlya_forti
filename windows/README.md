@@ -46,7 +46,11 @@ The app checks the archive size and SHA-256 and installs it into LocalAppData. S
 the new worker reuses the protected VPN runtime if its versions match.
 The app retains the signed archive and checks the installed executable against it
 before handing off a launch or elevating an updated build for the first time.
-If an older installation lacks that proof, open the release page to install it manually.
+For a 1.2.7 installer that discards the ZIP, releases starting with 1.2.14
+include a separate signature or workflow attestation for the executable under
+`licenses/`, a directory that the old ZIP extractor preserves. The updated app
+verifies its executable before signalling readiness. Future updates retain the
+executable hash in the launcher link so the original shortcut keeps working.
 The app switches to the new version only
 after preparation and restarts it; the previous installation remains available if
 the switch fails. **Открыть выпуск** remains available for manual installation.
@@ -55,8 +59,9 @@ attestation, or a `.zip.sig` and the corresponding embedded publisher key.
 Verification of a build attestation may need network access to refresh Sigstore
 trust data. **Открыть выпуск** remains available for releases without proof.
 
-To migrate from an older release without attestation support, including the published
-1.2.12 preview, extract the new release into a separate folder and launch
+From 1.2.7 with a prepared VPN runtime, choose **Обновить** when 1.2.14 or later is offered.
+From the published 1.2.12 preview, which requires a publisher signature
+to enable that button, extract the new release into a separate folder and launch
 `Forti Split.exe` from there. Update any existing shortcut to point to that file.
 The app reads the same Windows VPN profile and saved credentials. Later attested
 releases can be installed with **Обновить**.

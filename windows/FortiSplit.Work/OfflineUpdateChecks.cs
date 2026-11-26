@@ -77,6 +77,23 @@ internal static class OfflineUpdateChecks
         checks["legacy_update_without_proof_cannot_confirm_launch"] = !UpdateInstall.CanConfirmLaunch(executable, key);
         File.WriteAllText(Path.Combine(directory, UpdateInstall.ProofAttestation), "{}");
         checks["invalid_build_attestation_cannot_confirm_launch"] = !UpdateInstall.CanConfirmLaunch(executable, null);
+
+        // The 1.2.7 installer keeps the extracted files and deletes the ZIP.
+        File.Delete(Path.Combine(directory, UpdateInstall.ProofArchive));
+        File.Delete(Path.Combine(directory, UpdateInstall.ProofAttestation));
+        string licenses = Directory.CreateDirectory(Path.Combine(directory, "licenses")).FullName;
+        byte[] signature = publisher.SignData(File.ReadAllBytes(executable), HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
+        File.WriteAllBytes(Path.Combine(licenses, "FortiSplit.exe.sig"), signature);
+        checks["legacy_extracted_release_confirms_with_executable_signature"] = UpdateInstall.CanConfirmLaunch(executable, key);
+        using (var verified = UpdateInstall.OpenVerifiedExecutable(executable, key))
+        {
+            var link = verified.CreateLink(executable);
+            checks["next_update_preserves_hash_for_original_launcher"] =
+                link.TargetSha256 == Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(executable)));
+        }
+        checks["legacy_executable_signature_requires_trusted_key"] = !UpdateInstall.CanConfirmLaunch(executable, null);
+        File.AppendAllText(executable, "modified");
+        checks["legacy_executable_signature_rejects_modified_image"] = !UpdateInstall.CanConfirmLaunch(executable, key);
     }
 
     private static void SignExecutable(string executable, RSA publisher)

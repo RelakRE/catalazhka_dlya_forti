@@ -24,6 +24,9 @@
   the pinned project workflow on GitHub Actions, or a publisher signature that
   matches the public key embedded in the installed build. The updater checks the
   launched executable against the verified archive and retains the proof for later launches.
+  When a legacy installer discards the archive, the updated app verifies a separate
+  attestation or publisher signature over the locked executable before confirming
+  the update and when opening it for worker installation.
 - The Work tab uses the IPv4 addresses and packet lengths observed on the VPN
   interface to count traffic to configured work IPs. Packet contents are discarded.
   The private session status contains the currently active work IPs, their names,

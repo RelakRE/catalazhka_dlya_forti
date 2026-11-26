@@ -3,6 +3,10 @@ using System.Diagnostics;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text.Json;
+if(args is ["--extract-update",var archivePath,var destination]){
+ UpdateArchive.Extract(archivePath,destination);
+ return 0;
+}
 var results=new Dictionary<string,bool>();
 void Check(string name,bool condition)=>results.Add(name,condition);
 void Reject(string name,Action action){try{action();Check(name,false);}catch(Exception){Check(name,true);}}
